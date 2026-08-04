@@ -1,0 +1,6 @@
+{
+  "coefficient": 1.04319470752914,
+  "intercept": -0.12371324068835604,
+  "input": "logit_lightgbm_probability",
+  "fitted_from": "out_of_fold_train_predictions"
+}

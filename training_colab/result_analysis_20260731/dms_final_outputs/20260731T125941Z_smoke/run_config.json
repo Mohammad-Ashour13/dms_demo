@@ -1,0 +1,32 @@
+{
+  "train_windows_path": "/content/drive/MyDrive/Drive_monitoring/feature_engineeringV3/outputs/20260717T160540Z/window_features_train.csv",
+  "test_windows_path": "/content/drive/MyDrive/Drive_monitoring/feature_engineeringV3/outputs/20260717T160540Z/window_features_test.csv",
+  "feature_decisions_path": "/content/drive/MyDrive/Drive_monitoring/feature_engineeringV3/outputs/20260717T160540Z/feature_decisions.csv",
+  "output_path": "/content/drive/MyDrive/Drive_monitoring/training_colab/dms_final_outputs",
+  "run_mode": "smoke",
+  "seeds": [
+    42,
+    43,
+    44
+  ],
+  "feature_counts": [
+    7,
+    20,
+    40,
+    65
+  ],
+  "target_col": "label",
+  "dataset_col": "dataset_name",
+  "subject_col": "subject_id",
+  "video_col": "video_id",
+  "safee_name": "SAFEE",
+  "smoke_max_groups": 30,
+  "n_folds_smoke": 3,
+  "n_folds_full": 5,
+  "optuna_trials": 25,
+  "recall_target": 0.9,
+  "precision_target": 0.75,
+  "random_state": 42,
+  "use_gpu": true,
+  "n_jobs": -1
+}

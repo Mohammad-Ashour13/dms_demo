@@ -1,0 +1,4 @@
+seed,fold,train_rows,valid_rows,train_groups,valid_groups,overlap_groups
+42,0,14983,2492,21,2,0
+42,1,3362,14113,7,16,0
+42,2,16605,870,18,5,0

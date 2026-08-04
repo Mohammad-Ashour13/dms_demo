@@ -1,0 +1,188 @@
+{
+  "run_id": "20260731T140605Z_full_runtimefix1",
+  "created_utc": "2026-07-31T14:22:29.656105+00:00",
+  "run_mode": "full",
+  "bundle_status": "EXPERIMENTAL",
+  "selected_feature_count": 65,
+  "selected_features": [
+    "ear_q25",
+    "ear_energy",
+    "ear_max",
+    "ear_q75",
+    "ear_min",
+    "right_ear_q75",
+    "right_ear_energy",
+    "left_ear_mean",
+    "ear_mean",
+    "left_ear_min",
+    "left_ear_q25",
+    "yaw_q25",
+    "right_ear_max",
+    "yaw_min",
+    "gaze_x_min",
+    "left_ear_energy",
+    "left_ear_q75",
+    "gaze_y_max",
+    "right_ear_q25",
+    "right_ear_mean",
+    "yaw_max",
+    "yaw_energy",
+    "left_ear_max",
+    "gaze_y_energy",
+    "pitch_min",
+    "pitch_q25",
+    "gaze_y_mean_absolute_change",
+    "relative_ear_min",
+    "relative_ear_std",
+    "gaze_y_maximum_absolute_change",
+    "mar_max",
+    "roll_min",
+    "gaze_y_range",
+    "relative_ear_q25",
+    "pitch_mean",
+    "left_ear_coefficient_of_variation",
+    "pitch_max",
+    "relative_ear_q75",
+    "mar_energy",
+    "gaze_x_max",
+    "roll_energy",
+    "gaze_y_skewness",
+    "gaze_y_q75",
+    "gaze_zone_DOWN_ratio",
+    "mar_min",
+    "pitch_q75",
+    "mar_q25",
+    "roll_q75",
+    "gaze_y_variance",
+    "relative_ear_max",
+    "relative_ear_mean",
+    "roll_q25",
+    "roll_max",
+    "yaw_coefficient_of_variation",
+    "gaze_x_energy",
+    "gaze_y_median",
+    "mar_mean",
+    "face_velocity_x_max",
+    "head_motion_q25",
+    "mar_variance",
+    "face_velocity_x_min",
+    "pitch_energy",
+    "face_velocity_x_maximum_absolute_change",
+    "head_motion_median",
+    "gaze_y_q25"
+  ],
+  "selected_params": {
+    "learning_rate": 0.03295602828243519,
+    "num_leaves": 26,
+    "max_depth": 7,
+    "min_child_samples": 48,
+    "subsample": 0.8858366811852195,
+    "colsample_bytree": 0.7504006921604524,
+    "reg_alpha": 0.003987361890504114,
+    "reg_lambda": 0.7295607596119689,
+    "n_estimators": 38
+  },
+  "selected_seed": 42,
+  "seeds": [
+    42,
+    43,
+    44
+  ],
+  "folds": 5,
+  "operating_threshold": 0.317,
+  "oof_constraints_met": false,
+  "targets": {
+    "precision": 0.75,
+    "recall": 0.9
+  },
+  "data_hashes": {
+    "train_windows": "9555f9209f2095dc86962de55e7becc19848e08a2dc18af6bca3eced775486de",
+    "test_windows": "4a19abb44cbf9c9df5538aacfcd69a82b53aafb6c092c1b0134834131e2737dc",
+    "feature_decisions": "5106876a2874d572d0881a60d76135a98f7846bea8266d2e531557f5774eb7db"
+  },
+  "data_rows": {
+    "fitting_train": 70771,
+    "fixed_test": 15791,
+    "excluded_safee_train": 98,
+    "safee_positive_stress": 53
+  },
+  "group_audit": {
+    "train_test_overlap": 0,
+    "subject_id_normalization": "integer-like aliases normalized (e.g. 001 == 1 == 1.0)"
+  },
+  "execution_summary": {
+    "planned_by_stage": {
+      "A": 20,
+      "B": 250,
+      "C": 15,
+      "LODO": 3,
+      "FINAL": 1
+    },
+    "actual_by_stage": {
+      "A": 20,
+      "B": 250,
+      "C": 15,
+      "FINAL": 1,
+      "LODO": 3
+    },
+    "planned_total": 289,
+    "actual_total": 289,
+    "complete": true,
+    "effective_device_counts": {
+      "gpu": 289
+    },
+    "note": "One Optuna trial contains one grouped-CV fit per fold."
+  },
+  "versions": {
+    "python": "3.12.13",
+    "lightgbm": "4.6.0",
+    "sklearn": "1.6.1",
+    "pandas": "2.2.3",
+    "numpy": "2.5.1"
+  },
+  "safee_stress_test": {
+    "status": "POSITIVE_STRESS_ONLY",
+    "n_windows": 53,
+    "mean_probability": 0.7204417148295986,
+    "positive_rate": 1.0
+  },
+  "test_gate_passed": false,
+  "domain_gate": {
+    "lodo_not_below_random": true,
+    "test_not_below_random": true
+  },
+  "config": {
+    "train_windows_path": "/content/drive/MyDrive/Drive_monitoring/feature_engineeringV3/outputs/20260717T160540Z/window_features_train.csv",
+    "test_windows_path": "/content/drive/MyDrive/Drive_monitoring/feature_engineeringV3/outputs/20260717T160540Z/window_features_test.csv",
+    "feature_decisions_path": "/content/drive/MyDrive/Drive_monitoring/feature_engineeringV3/outputs/20260717T160540Z/feature_decisions.csv",
+    "output_path": "/content/drive/MyDrive/Drive_monitoring/training_colab/dms_final_outputs",
+    "run_mode": "full",
+    "seeds": [
+      42,
+      43,
+      44
+    ],
+    "feature_counts": [
+      7,
+      20,
+      40,
+      65
+    ],
+    "target_col": "label",
+    "dataset_col": "dataset_name",
+    "subject_col": "subject_id",
+    "video_col": "video_id",
+    "safee_name": "SAFEE",
+    "smoke_max_groups": 30,
+    "n_folds_smoke": 3,
+    "n_folds_full": 5,
+    "optuna_trials": 25,
+    "recall_target": 0.9,
+    "precision_target": 0.75,
+    "random_state": 42,
+    "use_gpu": true,
+    "n_jobs": -1
+  },
+  "derived_from_run_id": "20260731T140605Z_full",
+  "runtime_patch": "eye-events-fusion-v2"
+}

@@ -1,0 +1,150 @@
+{
+  "run_id": "20260731T125941Z_smoke",
+  "created_utc": "2026-07-31T13:00:15.218091+00:00",
+  "run_mode": "smoke",
+  "bundle_status": "EXPERIMENTAL_SMOKE",
+  "selected_feature_count": 65,
+  "selected_features": [
+    "ear_q25",
+    "ear_energy",
+    "ear_max",
+    "ear_q75",
+    "ear_min",
+    "right_ear_q75",
+    "right_ear_energy",
+    "left_ear_mean",
+    "ear_mean",
+    "left_ear_min",
+    "left_ear_q25",
+    "yaw_q25",
+    "right_ear_max",
+    "yaw_min",
+    "gaze_x_min",
+    "left_ear_energy",
+    "left_ear_q75",
+    "gaze_y_max",
+    "right_ear_q25",
+    "right_ear_mean",
+    "yaw_max",
+    "yaw_energy",
+    "left_ear_max",
+    "gaze_y_energy",
+    "pitch_min",
+    "pitch_q25",
+    "gaze_y_mean_absolute_change",
+    "relative_ear_min",
+    "relative_ear_std",
+    "gaze_y_maximum_absolute_change",
+    "mar_max",
+    "roll_min",
+    "gaze_y_range",
+    "relative_ear_q25",
+    "pitch_mean",
+    "left_ear_coefficient_of_variation",
+    "pitch_max",
+    "relative_ear_q75",
+    "mar_energy",
+    "gaze_x_max",
+    "roll_energy",
+    "gaze_y_skewness",
+    "gaze_y_q75",
+    "gaze_zone_DOWN_ratio",
+    "mar_min",
+    "pitch_q75",
+    "mar_q25",
+    "roll_q75",
+    "gaze_y_variance",
+    "relative_ear_max",
+    "relative_ear_mean",
+    "roll_q25",
+    "roll_max",
+    "yaw_coefficient_of_variation",
+    "gaze_x_energy",
+    "gaze_y_median",
+    "mar_mean",
+    "face_velocity_x_max",
+    "head_motion_q25",
+    "mar_variance",
+    "face_velocity_x_min",
+    "pitch_energy",
+    "face_velocity_x_maximum_absolute_change",
+    "head_motion_median",
+    "gaze_y_q25"
+  ],
+  "selected_params": {
+    "n_estimators": 26
+  },
+  "selected_seed": 42,
+  "seeds": [
+    42
+  ],
+  "folds": 3,
+  "operating_threshold": 0.221,
+  "oof_constraints_met": false,
+  "targets": {
+    "precision": 0.75,
+    "recall": 0.9
+  },
+  "data_hashes": {
+    "train_windows": "9555f9209f2095dc86962de55e7becc19848e08a2dc18af6bca3eced775486de",
+    "test_windows": "4a19abb44cbf9c9df5538aacfcd69a82b53aafb6c092c1b0134834131e2737dc",
+    "feature_decisions": "5106876a2874d572d0881a60d76135a98f7846bea8266d2e531557f5774eb7db"
+  },
+  "data_rows": {
+    "fitting_train": 17475,
+    "fixed_test": 15791,
+    "excluded_safee_train": 98,
+    "safee_positive_stress": 53
+  },
+  "group_audit": {
+    "train_test_overlap": 0
+  },
+  "versions": {
+    "python": "3.12.13",
+    "lightgbm": "4.6.0",
+    "sklearn": "1.6.1",
+    "pandas": "2.2.3",
+    "numpy": "2.5.1"
+  },
+  "safee_stress_test": {
+    "status": "NOT_PRESENT",
+    "n_windows": 0
+  },
+  "test_gate_passed": false,
+  "domain_gate": {
+    "lodo_not_below_random": false,
+    "test_not_below_random": false
+  },
+  "config": {
+    "train_windows_path": "/content/drive/MyDrive/Drive_monitoring/feature_engineeringV3/outputs/20260717T160540Z/window_features_train.csv",
+    "test_windows_path": "/content/drive/MyDrive/Drive_monitoring/feature_engineeringV3/outputs/20260717T160540Z/window_features_test.csv",
+    "feature_decisions_path": "/content/drive/MyDrive/Drive_monitoring/feature_engineeringV3/outputs/20260717T160540Z/feature_decisions.csv",
+    "output_path": "/content/drive/MyDrive/Drive_monitoring/training_colab/dms_final_outputs",
+    "run_mode": "smoke",
+    "seeds": [
+      42,
+      43,
+      44
+    ],
+    "feature_counts": [
+      7,
+      20,
+      40,
+      65
+    ],
+    "target_col": "label",
+    "dataset_col": "dataset_name",
+    "subject_col": "subject_id",
+    "video_col": "video_id",
+    "safee_name": "SAFEE",
+    "smoke_max_groups": 30,
+    "n_folds_smoke": 3,
+    "n_folds_full": 5,
+    "optuna_trials": 25,
+    "recall_target": 0.9,
+    "precision_target": 0.75,
+    "random_state": 42,
+    "use_gpu": true,
+    "n_jobs": -1
+  }
+}

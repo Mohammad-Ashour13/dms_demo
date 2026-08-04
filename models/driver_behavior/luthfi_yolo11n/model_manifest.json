@@ -1,0 +1,27 @@
+{
+  "model_version": "luthfi-driver-inattention-yolo11n-7cb52d3",
+  "architecture": "Ultralytics YOLO11n detect",
+  "artifact": "best_yolo11n.pt",
+  "sha256": "37ab5aeee2c4f655fcbe733195e53cff8c4ea03ab36accd064d1bee4b22c0c9d",
+  "size_bytes": 5462298,
+  "source_repository": "https://github.com/luthfajr/driver-inattention-detection",
+  "source_commit": "7cb52d367a936e8803d61b960d830291fa8f880e",
+  "source_path": "models/best_yolo11n.pt",
+  "source_classes": [
+    "cigarette",
+    "closed_eyes",
+    "drink_or_food",
+    "hand_near_head",
+    "inattentive_gaze",
+    "open_mouth",
+    "phone"
+  ],
+  "enabled_classes": {
+    "phone": "PHONE_USE",
+    "cigarette": "SMOKING",
+    "drink_or_food": "EATING"
+  },
+  "camera_scope": "front-facing driver view",
+  "deployment_status": "RESEARCH_CONTROLLED_DEMO",
+  "license_note": "No explicit repository LICENSE was present at the verified source commit. Ultralytics YOLO software/models use AGPL-3.0 or an Enterprise license. Obtain legal approval before commercial deployment."
+}

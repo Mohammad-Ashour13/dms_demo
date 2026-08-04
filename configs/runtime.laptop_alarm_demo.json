@@ -1,0 +1,105 @@
+{
+  "camera": {
+    "source": 0,
+    "width": 640,
+    "height": 480,
+    "fps": 15.0,
+    "ai_queue_size": 2
+  },
+  "perception": {
+    "face_landmarker_path": "models/mediapipe/face_landmarker.task",
+    "min_detection_confidence": 0.5,
+    "min_tracking_confidence": 0.5,
+    "min_face_quality": 0.55,
+    "min_eye_signal_quality": 0.45,
+    "max_eye_pose_deg": 25.0,
+    "max_eye_asymmetry_ratio": 0.45,
+    "min_face_width_ratio": 0.20,
+    "min_interocular_distance_px": 50.0,
+    "min_eye_width_px": 24.0
+  },
+  "telemetry": {
+    "log_dir": "logs",
+    "mode": "DEBUG",
+    "rotate_bytes": 20971520,
+    "backups": 5,
+    "live_status_hz": 2.0
+  },
+  "evaluation": {
+    "enabled": true,
+    "output_dir": "evaluation_sessions",
+    "record_full_session": true,
+    "video_fps": 15.0,
+    "queue_size": 512,
+    "sampling_interval_sec": 0.5,
+    "transition_tolerance_sec": 1.0,
+    "alert_merge_gap_sec": 2.0,
+    "minimum_overlap_sec": 0.5,
+    "primary_positive_states": ["DROWSY", "CRITICAL"]
+  },
+  "behavior_detector": {
+    "enabled": true,
+    "required": true,
+    "model_path": "models/driver_behavior/luthfi_yolo11n/best_yolo11n.pt",
+    "manifest_path": "models/driver_behavior/luthfi_yolo11n/model_manifest.json",
+    "backend": "ultralytics",
+    "execution_mode": "process",
+    "device": "cpu",
+    "image_size": 640,
+    "iou_threshold": 0.45,
+    "inference_interval_sec": 0.5,
+    "queue_size": 1,
+    "driver_roi": [0.0, 0.0, 1.0, 1.0],
+    "temporal_window_sec": 1.5,
+    "minimum_samples": 3,
+    "activation_ratio": 0.6,
+    "activation_persistence_sec": 0.5,
+    "clear_persistence_sec": 2.0,
+    "evidence_refresh_sec": 1.0,
+    "evidence_ttl_sec": 2.5,
+    "class_thresholds": {
+      "phone": 0.4,
+      "cigarette": 0.3,
+      "drink_or_food": 0.35
+    },
+    "class_mapping": {
+      "phone": "PHONE_USE",
+      "cigarette": "SMOKING",
+      "drink_or_food": "EATING"
+    }
+  },
+  "alarm": {
+    "enabled": true,
+    "mode": "LOCAL",
+    "allow_in_shadow": true,
+    "live_camera_only": true,
+    "allow_replay_audio": false,
+    "backend": "auto",
+    "device": "default",
+    "required": true,
+    "startup_self_test": true,
+    "master_gain": 0.40,
+    "queue_size": 8,
+    "drowsy_reminder_sec": 10.0,
+    "drowsy_rearm_sec": 5.0,
+    "drowsy_ack_silence_sec": 10.0,
+    "escalation_window_sec": 60.0,
+    "escalation_episode_count": 3,
+    "escalation_continuous_sec": 30.0,
+    "escalation_reminder_sec": 7.0,
+    "critical_reminder_sec": 4.0,
+    "critical_escalate_after_sec": 15.0,
+    "critical_escalated_reminder_sec": 2.5,
+    "acknowledge_open_sec": 0.50
+  },
+  "hmi": {
+    "enabled": true,
+    "show_camera": true,
+    "critical_flash_hz": 2.0,
+    "window_name": "DMS Controlled Demo"
+  },
+  "deployment_mode": "SHADOW",
+  "active_model_path": "models/drowsiness/active_model.json",
+  "inference_interval_sec": 0.5,
+  "session_name": "raspberry-live"
+}

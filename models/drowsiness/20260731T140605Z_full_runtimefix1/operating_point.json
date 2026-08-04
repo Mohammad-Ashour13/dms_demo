@@ -1,0 +1,7 @@
+{
+  "threshold": 0.317,
+  "selection_source": "calibrated_oof_train_predictions",
+  "recall_target": 0.9,
+  "precision_target": 0.75,
+  "constraints_met": false
+}
