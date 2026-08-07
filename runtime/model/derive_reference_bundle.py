@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import hashlib
 import json
 import shutil
@@ -37,13 +38,24 @@ def derive_reference_bundle(source: Path, train_csv: Path, output: Path) -> Path
 
     try:
         import lightgbm as lgb
-        import pandas as pd
+        import numpy as np
     except ImportError as exc:
-        raise RuntimeError("pandas and lightgbm are required to derive the reference bundle") from exc
+        raise RuntimeError("numpy and lightgbm are required to derive the reference bundle") from exc
 
     schema = json.loads((source / "feature_schema.json").read_text(encoding="utf-8"))
     features = list(schema["ordered_features"])
-    frame = pd.read_csv(train_csv, usecols=features)
+    columns: dict[str, list[float]] = {name: [] for name in features}
+    with train_csv.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        missing_columns = sorted(set(features) - set(reader.fieldnames or []))
+        if missing_columns:
+            raise ValueError(f"Training CSV is missing required features: {missing_columns[:5]}")
+        for row in reader:
+            for name in features:
+                try:
+                    columns[name].append(float(row.get(name, "")))
+                except (TypeError, ValueError):
+                    columns[name].append(float("nan"))
     booster = lgb.Booster(model_file=str(source / "model.txt"))
     gains = dict(zip(booster.feature_name(), booster.feature_importance(importance_type="gain")))
     total_gain = max(float(sum(gains.values())), 1e-12)
@@ -51,18 +63,23 @@ def derive_reference_bundle(source: Path, train_csv: Path, output: Path) -> Path
     ranks = {name: index + 1 for index, name in enumerate(ranked)}
     reference = {}
     for name in features:
-        numeric = pd.to_numeric(frame[name], errors="coerce")
-        quantiles = numeric.dropna().quantile([0.01, 0.05, 0.50, 0.95, 0.99])
+        numeric = np.asarray(columns[name], dtype=float)
+        valid = numeric[~np.isnan(numeric)]
+        quantiles = (
+            np.quantile(valid, [0.01, 0.05, 0.50, 0.95, 0.99], method="linear")
+            if len(valid)
+            else np.asarray([float("nan")] * 5)
+        )
         reference[name] = {
-            "q01": float(quantiles.loc[0.01]),
-            "q05": float(quantiles.loc[0.05]),
-            "median": float(quantiles.loc[0.50]),
-            "q95": float(quantiles.loc[0.95]),
-            "q99": float(quantiles.loc[0.99]),
+            "q01": float(quantiles[0]),
+            "q05": float(quantiles[1]),
+            "median": float(quantiles[2]),
+            "q95": float(quantiles[3]),
+            "q99": float(quantiles[4]),
             "gain": float(gains.get(name, 0.0)),
             "gain_fraction": float(gains.get(name, 0.0) / total_gain),
             "gain_rank": int(ranks[name]),
-            "missing_rate": float(numeric.isna().mean()),
+            "missing_rate": float(np.mean(np.isnan(numeric))) if len(numeric) else 0.0,
         }
 
     output.mkdir(parents=True, exist_ok=True)

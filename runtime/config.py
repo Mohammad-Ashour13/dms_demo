@@ -18,6 +18,7 @@ class CameraConfig:
 @dataclass(slots=True)
 class PerceptionConfig:
     face_landmarker_path: str = "models/mediapipe/face_landmarker.task"
+    process_width: int = 256
     min_detection_confidence: float = 0.5
     min_tracking_confidence: float = 0.5
     min_face_quality: float = 0.55
@@ -110,16 +111,24 @@ class DriftConfig:
 class BehaviorDetectorConfig:
     enabled: bool = False
     required: bool = False
-    model_path: str = "models/driver_behavior/luthfi_yolo11n/best_yolo11n.pt"
+    model_path: str = "models/driver_behavior/luthfi_yolo11n/best_yolo11n_ncnn_model"
     manifest_path: str = "models/driver_behavior/luthfi_yolo11n/model_manifest.json"
-    backend: str = "ultralytics"
-    execution_mode: str = "process"
+    backend: str = "auto"
+    execution_mode: str = "auto"
     device: str = "cpu"
+    ncnn_num_threads: int = 3
     image_size: int = 640
     iou_threshold: float = 0.45
     inference_interval_sec: float = 0.50
+    adaptive_interval: bool = True
+    latency_budget_ms: float = 250.0
+    max_inference_interval_sec: float = 1.5
     queue_size: int = 1
     driver_roi: list[float] = field(default_factory=lambda: [0.0, 0.0, 1.0, 1.0])
+    roi_mode: str = "face"
+    roi_scale: float = 1.6
+    roi_min_size: int = 96
+    roi_fallback_static_on_no_face: bool = True
     temporal_window_sec: float = 1.5
     minimum_samples: int = 3
     activation_ratio: float = 0.60
@@ -234,6 +243,9 @@ class RuntimeConfig:
     active_model_path: str = "models/drowsiness/active_model.json"
     inference_interval_sec: float = 0.5
     session_name: str = "raspberry-live"
+    cv_num_threads: int = 2
+    omp_num_threads: int = 2
+    ncnn_num_threads: int = 3
 
 
 T = TypeVar("T")
@@ -299,6 +311,8 @@ def load_config(path: Path) -> RuntimeConfig:
         raise ValueError("events.binocular_close_sync_sec must be positive")
     if not 0 < config.events.max_eye_gaze_offset <= 1:
         raise ValueError("events.max_eye_gaze_offset must be in (0, 1]")
+    if config.perception.process_width < 0:
+        raise ValueError("perception.process_width must be zero or positive")
     if not 0 < config.perception.min_face_width_ratio < 1:
         raise ValueError("perception.min_face_width_ratio must be in (0, 1)")
     if min(
@@ -313,12 +327,23 @@ def load_config(path: Path) -> RuntimeConfig:
             "fusion.precritical_drowsy_closure_sec must be positive and below prolonged closure"
         )
     detector = config.behavior_detector
-    if detector.backend not in {"ultralytics"}:
-        raise ValueError("behavior_detector.backend must be ultralytics")
-    if detector.execution_mode not in {"process", "thread"}:
-        raise ValueError("behavior_detector.execution_mode must be process or thread")
+    detector.backend = str(detector.backend).lower()
+    detector.execution_mode = str(detector.execution_mode).lower()
+    detector.roi_mode = str(detector.roi_mode).lower()
+    if detector.backend not in {"auto", "ncnn", "onnx", "pytorch", "ultralytics"}:
+        raise ValueError("behavior_detector.backend must be auto, ncnn, onnx, pytorch or ultralytics")
+    if detector.execution_mode not in {"auto", "process", "thread"}:
+        raise ValueError("behavior_detector.execution_mode must be auto, process or thread")
+    if detector.roi_mode not in {"face", "static", "full"}:
+        raise ValueError("behavior_detector.roi_mode must be face, static or full")
     if detector.image_size <= 0 or detector.inference_interval_sec <= 0 or detector.queue_size <= 0:
         raise ValueError("behavior detector image size, interval and queue size must be positive")
+    if detector.ncnn_num_threads <= 0:
+        raise ValueError("behavior_detector.ncnn_num_threads must be positive")
+    if detector.latency_budget_ms <= 0 or detector.max_inference_interval_sec < detector.inference_interval_sec:
+        raise ValueError("behavior detector adaptive interval settings are invalid")
+    if detector.roi_scale < 1.0 or detector.roi_min_size <= 0:
+        raise ValueError("behavior_detector ROI scale and min size are invalid")
     if detector.minimum_samples <= 0 or detector.temporal_window_sec <= 0:
         raise ValueError("behavior detector temporal settings must be positive")
     if not 0 < detector.activation_ratio <= 1:
@@ -336,6 +361,8 @@ def load_config(path: Path) -> RuntimeConfig:
         raise ValueError("behavior detector thresholds and mapping must define the same source classes")
     if any(not 0 < float(value) <= 1 for value in detector.class_thresholds.values()):
         raise ValueError("behavior detector class thresholds must be in (0, 1]")
+    if min(config.cv_num_threads, config.omp_num_threads, config.ncnn_num_threads) <= 0:
+        raise ValueError("runtime thread caps must be positive")
     if not 0 <= config.fusion.perclos_min_coverage <= 1:
         raise ValueError("fusion.perclos_min_coverage must be between 0 and 1")
     if min(
