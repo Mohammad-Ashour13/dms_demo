@@ -7,7 +7,12 @@ import numpy as np
 from dms_final_system.runtime.config import BehaviorDetectorConfig
 from dms_final_system.runtime.fusion import FusionStateMachine
 from dms_final_system.runtime.integration import EvidenceBus
-from dms_final_system.runtime.objects import TemporalBehaviorFilter, YoloBehaviorDetector
+from dms_final_system.runtime.objects import (
+    TemporalBehaviorFilter,
+    YoloBehaviorDetector,
+    resolve_execution_mode,
+    resolve_yolo_backend,
+)
 from dms_final_system.shared.contracts import (
     AlarmLevel,
     DriverState,
@@ -140,6 +145,114 @@ class _Backend:
 
     def predict(self, frame, **kwargs):
         return [_detection("phone", 0.9)]
+
+
+def _detector_config(tmp_path, **overrides):
+    model = tmp_path / "dummy.pt"
+    model.write_bytes(b"dummy")
+    manifest = tmp_path / "model_manifest.json"
+    manifest.write_text(
+        """{
+  "model_version": "test-yolo",
+  "source_classes": ["cigarette", "closed_eyes", "drink_or_food", "hand_near_head", "inattentive_gaze", "open_mouth", "phone"]
+}"""
+    )
+    values = dict(
+        enabled=True,
+        required=True,
+        model_path=str(model),
+        manifest_path=str(manifest),
+        inference_interval_sec=0.01,
+    )
+    values.update(overrides)
+    return BehaviorDetectorConfig(**values)
+
+
+def test_backend_auto_resolver_infers_runtime_from_model_path(tmp_path):
+    ncnn_dir = tmp_path / "best_yolo11n_ncnn_model"
+    ncnn_dir.mkdir()
+    assert resolve_yolo_backend(ncnn_dir, "auto") == "ncnn"
+    assert resolve_yolo_backend("driver.onnx", "auto") == "onnx"
+    assert resolve_yolo_backend("driver.pt", "auto") == "pytorch"
+    assert resolve_yolo_backend("ignored", "ultralytics") == "pytorch"
+    assert resolve_execution_mode("ncnn", "auto") == "thread"
+    assert resolve_execution_mode("onnx", "auto") == "thread"
+    assert resolve_execution_mode("pytorch", "auto") == "process"
+    assert resolve_execution_mode("ncnn", "process") == "process"
+
+
+def test_static_roi_crop_preserves_full_frame_offsets():
+    config = BehaviorDetectorConfig(
+        enabled=False,
+        roi_mode="static",
+        driver_roi=[0.50, 0.25, 1.0, 1.0],
+    )
+    detector = YoloBehaviorDetector(config, EvidenceBus(), _Telemetry())
+    frame = np.zeros((80, 120, 3), dtype=np.uint8)
+    crop, offset_x, offset_y, info = detector._crop(frame)
+    assert crop.shape[:2] == (60, 60)
+    assert (offset_x, offset_y) == (60, 20)
+    assert info["crop_xyxy"] == [60, 20, 120, 80]
+
+
+def test_face_roi_crop_contains_face_and_is_clamped_to_frame():
+    config = BehaviorDetectorConfig(
+        enabled=False,
+        roi_mode="face",
+        roi_scale=2.0,
+        roi_min_size=40,
+    )
+    detector = YoloBehaviorDetector(config, EvidenceBus(), _Telemetry())
+    frame = np.zeros((100, 160, 3), dtype=np.uint8)
+    crop, offset_x, offset_y, info = detector._crop(frame, (60.0, 30.0, 100.0, 70.0))
+    x1, y1, x2, y2 = info["crop_xyxy"]
+    assert info["mode"] == "face"
+    assert x1 <= 60 <= 100 <= x2
+    assert y1 <= 30 <= 70 <= y2
+    assert crop.shape[:2] == (y2 - y1, x2 - x1)
+    assert (offset_x, offset_y) == (x1, y1)
+    assert 0 <= x1 < x2 <= 160
+    assert 0 <= y1 < y2 <= 100
+
+
+def test_face_roi_falls_back_to_static_when_face_missing():
+    config = BehaviorDetectorConfig(
+        enabled=False,
+        roi_mode="face",
+        driver_roi=[0.0, 0.0, 0.5, 1.0],
+        roi_fallback_static_on_no_face=True,
+    )
+    detector = YoloBehaviorDetector(config, EvidenceBus(), _Telemetry())
+    frame = np.zeros((40, 80, 3), dtype=np.uint8)
+    crop, offset_x, offset_y, info = detector._crop(frame, None)
+    assert crop.shape[:2] == (40, 40)
+    assert (offset_x, offset_y) == (0, 0)
+    assert info["fallback_reason"] == "no_face"
+
+
+def test_adaptive_interval_grows_and_shrinks_with_latency_budget(tmp_path):
+    telemetry = _Telemetry()
+    detector = YoloBehaviorDetector(
+        _detector_config(
+            tmp_path,
+            adaptive_interval=True,
+            latency_budget_ms=10.0,
+            max_inference_interval_sec=0.05,
+        ),
+        EvidenceBus(),
+        telemetry,
+        backend=_Backend(),
+    )
+    try:
+        base = detector.effective_interval_sec
+        detector._update_effective_interval(20.0, 1.0, 1)
+        assert detector.effective_interval_sec > base
+        detector._update_effective_interval(1.0, 2.0, 2)
+        assert detector.effective_interval_sec == base
+        changes = [record for record in telemetry.records if record[1] == "interval_changed"]
+        assert len(changes) == 2
+    finally:
+        detector.close()
 
 
 def test_downloaded_model_manifest_checksum_and_async_contract_are_valid():

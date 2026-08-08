@@ -152,6 +152,7 @@ class MediaPipeFacePerception:
         min_face_width_ratio=0.20,
         min_interocular_distance_px=50.0,
         min_eye_width_px=24.0,
+        process_width=256,
     ):
         model_path = Path(model_path)
         if not model_path.is_file():
@@ -163,6 +164,7 @@ class MediaPipeFacePerception:
         except ImportError as exc:
             raise RuntimeError("Install requirements-raspberry.txt to use MediaPipe") from exc
         self.mp = mp
+        self.process_width = int(process_width)
         options = vision.FaceLandmarkerOptions(
             base_options=python.BaseOptions(model_asset_path=str(model_path)),
             running_mode=vision.RunningMode.VIDEO,
@@ -175,6 +177,9 @@ class MediaPipeFacePerception:
         self.detector = vision.FaceLandmarker.create_from_options(options)
         self.previous: tuple[float, float, float, float, float, float] | None = None
         self.last_timestamp_ms = -1
+        self.latest_face_bbox_xyxy: tuple[float, float, float, float] | None = None
+        self.latest_face_bbox_frame_id: int | None = None
+        self.latest_face_bbox_monotonic_sec: float | None = None
         self.min_eye_signal_quality = float(min_eye_signal_quality)
         self.max_eye_pose_deg = float(max_eye_pose_deg)
         self.max_eye_asymmetry_ratio = float(max_eye_asymmetry_ratio)
@@ -184,13 +189,25 @@ class MediaPipeFacePerception:
 
     def process(self, packet: FramePacket) -> FaceSignal:
         height, width = packet.frame.shape[:2]
-        rgb = cv2.cvtColor(packet.frame, cv2.COLOR_BGR2RGB)
+        processing_frame = packet.frame
+        if self.process_width > 0 and width > self.process_width:
+            process_width = max(1, int(self.process_width))
+            process_height = max(1, int(round(height * (process_width / width))))
+            processing_frame = cv2.resize(
+                packet.frame,
+                (process_width, process_height),
+                interpolation=cv2.INTER_AREA,
+            )
+        rgb = cv2.cvtColor(processing_frame, cv2.COLOR_BGR2RGB)
         image = self.mp.Image(image_format=self.mp.ImageFormat.SRGB, data=rgb)
         timestamp_ms = max(self.last_timestamp_ms + 1, int(packet.monotonic_sec * 1000))
         self.last_timestamp_ms = timestamp_ms
         result = self.detector.detect_for_video(image, timestamp_ms)
         if not result.face_landmarks:
             self.previous = None
+            self.latest_face_bbox_xyxy = None
+            self.latest_face_bbox_frame_id = packet.frame_id
+            self.latest_face_bbox_monotonic_sec = packet.monotonic_sec
             return FaceSignal(
                 packet.frame_id,
                 packet.utc_timestamp,
@@ -204,6 +221,16 @@ class MediaPipeFacePerception:
         xs, ys = np.asarray([p.x for p in landmarks]), np.asarray([p.y for p in landmarks])
         face_w, face_h = float(xs.max() - xs.min()), float(ys.max() - ys.min())
         face_width_px, face_height_px = face_w * width, face_h * height
+        bbox_x1, bbox_y1 = float(np.clip(xs.min(), 0.0, 1.0)), float(np.clip(ys.min(), 0.0, 1.0))
+        bbox_x2, bbox_y2 = float(np.clip(xs.max(), 0.0, 1.0)), float(np.clip(ys.max(), 0.0, 1.0))
+        self.latest_face_bbox_xyxy = (
+            bbox_x1 * width,
+            bbox_y1 * height,
+            bbox_x2 * width,
+            bbox_y2 * height,
+        )
+        self.latest_face_bbox_frame_id = packet.frame_id
+        self.latest_face_bbox_monotonic_sec = packet.monotonic_sec
         center_x, center_y = float((xs.max() + xs.min()) / 2), float((ys.max() + ys.min()) / 2)
         border_margin = min(xs.min(), ys.min(), 1 - xs.max(), 1 - ys.max())
         size_score = float(np.clip(min(face_w / 0.20, face_h / 0.20), 0, 1))

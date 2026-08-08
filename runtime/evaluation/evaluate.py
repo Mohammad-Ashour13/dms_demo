@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
-import pandas as pd
 
 
 ALLOWED_LABELS = {
@@ -47,6 +46,31 @@ def _read_jsonl(path: Path) -> list[dict]:
         except json.JSONDecodeError as exc:
             raise ValueError(f"Invalid JSONL at {path}:{line_number}") from exc
     return records
+
+
+def _read_csv_records(path: Path) -> list[dict[str, str]]:
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    with path.open("r", encoding="utf-8", newline="") as handle:
+        return list(csv.DictReader(handle))
+
+
+def _write_csv_records(
+    path: Path,
+    rows: list[dict],
+    columns: list[str] | tuple[str, ...] | None = None,
+) -> None:
+    if columns is None:
+        columns = []
+        for row in rows:
+            for key in row:
+                if key not in columns:
+                    columns.append(key)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(columns), extrasaction="ignore")
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({key: row.get(key, "") for key in columns})
 
 
 def _load_annotations(path: Path, session_id: str) -> list[Interval]:
@@ -262,15 +286,19 @@ def evaluate_session(session_dir: Path) -> dict:
     merge_gap = float(config.get("alert_merge_gap_sec", 2.0))
     minimum_overlap = float(config.get("minimum_overlap_sec", 0.5))
     positive_states = set(config.get("primary_positive_states", ["DROWSY", "CRITICAL"]))
-    timestamps = pd.read_csv(session_dir / "frame_timestamps.csv")
-    if timestamps.empty:
+    timestamps = _read_csv_records(session_dir / "frame_timestamps.csv")
+    if not timestamps:
         raise ValueError("frame_timestamps.csv is empty")
-    first_monotonic = float(timestamps.iloc[0]["monotonic_sec"])
-    playback_times = timestamps["video_sec"].to_numpy(dtype=float)
-    session_times = (
-        timestamps["session_sec"].to_numpy(dtype=float)
-        if "session_sec" in timestamps.columns
-        else playback_times
+    first_monotonic = float(timestamps[0]["monotonic_sec"])
+    playback_times = np.asarray([float(row["video_sec"]) for row in timestamps], dtype=float)
+    session_times = np.asarray(
+        [
+            float(row["session_sec"])
+            if row.get("session_sec") not in {None, ""}
+            else float(row["video_sec"])
+            for row in timestamps
+        ],
+        dtype=float,
     )
 
     def to_video_sec(monotonic_sec: float) -> float:
@@ -465,13 +493,21 @@ def evaluate_session(session_dir: Path) -> dict:
             "checks": checks,
         },
     }
-    timeline = pd.DataFrame(
-        {
-            "video_sec": grid, "ground_truth": truth, "fusion_state": states,
-            "predicted_drowsy": predicted.astype(int), "scored": scored.astype(int),
-        }
+    _write_csv_records(
+        session_dir / "evaluation_timeline.csv",
+        [
+            {
+                "video_sec": float(video_sec),
+                "ground_truth": str(ground_truth),
+                "fusion_state": str(fusion_state),
+                "predicted_drowsy": int(predicted_drowsy),
+                "scored": int(is_scored),
+            }
+            for video_sec, ground_truth, fusion_state, predicted_drowsy, is_scored
+            in zip(grid, truth, states, predicted, scored)
+        ],
+        columns=["video_sec", "ground_truth", "fusion_state", "predicted_drowsy", "scored"],
     )
-    timeline.to_csv(session_dir / "evaluation_timeline.csv", index=False)
     errors = []
     errors.extend(
         {
@@ -498,14 +534,28 @@ def evaluate_session(session_dir: Path) -> dict:
         }
         for item in false_alerts
     )
-    pd.DataFrame(
+    _write_csv_records(
+        session_dir / "evaluation_errors.csv",
         errors,
-        columns=("error_type", "id", "start_sec", "end_sec", "label", "reason_codes"),
-    ).to_csv(
-        session_dir / "evaluation_errors.csv", index=False
+        columns=["error_type", "id", "start_sec", "end_sec", "label", "reason_codes"],
     )
-    pd.DataFrame(matches).to_csv(session_dir / "episode_matches.csv", index=False)
-    pd.DataFrame(report["event_metrics"]).to_csv(session_dir / "event_metrics.csv", index=False)
+    _write_csv_records(
+        session_dir / "episode_matches.csv",
+        matches,
+        columns=[
+            "ground_truth_id", "ground_truth_label", "ground_truth_start_sec",
+            "ground_truth_end_sec", "alert_id", "alert_start_sec", "alert_end_sec",
+            "overlap_sec", "delay_sec",
+        ],
+    )
+    _write_csv_records(
+        session_dir / "event_metrics.csv",
+        report["event_metrics"],
+        columns=[
+            "kind", "ground_truth_events", "detected_events", "tp", "fp", "fn",
+            "precision", "recall", "f1",
+        ],
+    )
     (session_dir / "evaluation_metrics.json").write_text(
         json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8"
     )

@@ -3,35 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import os
 import time
 import uuid
 from dataclasses import asdict, replace
 from pathlib import Path
 
-from dms_final_system.shared.contracts import AlarmLevel
-from dms_final_system.shared.feature_contract import RUNTIME_FEATURE_VERSION
-from dms_final_system.runtime.calibration import PersonalCalibrator
-from dms_final_system.runtime.alarm import AlarmController, LinuxAudioOutput, NullAlarmOutput
-from dms_final_system.runtime.capture import LatestFrameCapture, ReplayCapture
-from dms_final_system.runtime.config import load_config
-from dms_final_system.runtime.events import EventEngine
-from dms_final_system.runtime.evaluation import EvaluationSessionRecorder
-from dms_final_system.runtime.features import V3RuntimeFeatureBuilder
-from dms_final_system.runtime.fusion import FusionStateMachine
-from dms_final_system.runtime.hmi import VisualHMI
-from dms_final_system.runtime.integration import EvidenceBus
-from dms_final_system.runtime.model.bundle import (
-    assert_deployment_allowed,
-    read_active_model,
-    verify_bundle,
-)
-from dms_final_system.runtime.model.predictor import LightGBMRuntimePredictor
-from dms_final_system.runtime.model.drift import FeatureDriftMonitor
-from dms_final_system.runtime.objects import YoloBehaviorDetector
-from dms_final_system.runtime.perception import MediaPipeFacePerception
-from dms_final_system.runtime.recording import RollingIncidentRecorder
-from dms_final_system.runtime.telemetry import LiveStatus, StructuredTelemetry
-from dms_final_system.runtime.telemetry.structured import system_health
+from dms_final_system.runtime.config import RuntimeConfig, load_config
 
 
 SYSTEM_ROOT = Path(__file__).resolve().parents[1]
@@ -42,8 +20,49 @@ def _resolve(path: str | Path) -> Path:
     return candidate if candidate.is_absolute() else SYSTEM_ROOT / candidate
 
 
+def _apply_thread_caps(config: RuntimeConfig) -> None:
+    omp_threads = str(int(config.omp_num_threads))
+    os.environ["OMP_NUM_THREADS"] = omp_threads
+    os.environ["OPENBLAS_NUM_THREADS"] = omp_threads
+    os.environ["MKL_NUM_THREADS"] = omp_threads
+    os.environ["NUMEXPR_NUM_THREADS"] = omp_threads
+    os.environ["NCNN_NUM_THREADS"] = str(int(config.ncnn_num_threads))
+    try:
+        import cv2
+
+        cv2.setNumThreads(int(config.cv_num_threads))
+    except ImportError:
+        pass
+
+
 def run(config_path: Path, replay_path: Path | None = None) -> None:
     config = load_config(config_path)
+    _apply_thread_caps(config)
+
+    from dms_final_system.shared.contracts import AlarmLevel
+    from dms_final_system.shared.feature_contract import RUNTIME_FEATURE_VERSION
+    from dms_final_system.runtime.calibration import PersonalCalibrator
+    from dms_final_system.runtime.alarm import AlarmController, LinuxAudioOutput, NullAlarmOutput
+    from dms_final_system.runtime.capture import LatestFrameCapture, ReplayCapture
+    from dms_final_system.runtime.events import EventEngine
+    from dms_final_system.runtime.evaluation import EvaluationSessionRecorder
+    from dms_final_system.runtime.features import V3RuntimeFeatureBuilder
+    from dms_final_system.runtime.fusion import FusionStateMachine
+    from dms_final_system.runtime.hmi import VisualHMI
+    from dms_final_system.runtime.integration import EvidenceBus
+    from dms_final_system.runtime.model.bundle import (
+        assert_deployment_allowed,
+        read_active_model,
+        verify_bundle,
+    )
+    from dms_final_system.runtime.model.predictor import LightGBMRuntimePredictor
+    from dms_final_system.runtime.model.drift import FeatureDriftMonitor
+    from dms_final_system.runtime.objects import YoloBehaviorDetector
+    from dms_final_system.runtime.perception import MediaPipeFacePerception
+    from dms_final_system.runtime.recording import RollingIncidentRecorder
+    from dms_final_system.runtime.telemetry import LiveStatus, StructuredTelemetry
+    from dms_final_system.runtime.telemetry.structured import system_health
+
     session_id = f"{config.session_name}-{uuid.uuid4().hex[:8]}"
     active_descriptor = read_active_model(_resolve(config.active_model_path))
     bundle = Path(active_descriptor["bundle_dir"])
@@ -83,6 +102,7 @@ def run(config_path: Path, replay_path: Path | None = None) -> None:
         config.perception.min_face_width_ratio,
         config.perception.min_interocular_distance_px,
         config.perception.min_eye_width_px,
+        process_width=config.perception.process_width,
     )
     calibrator = PersonalCalibrator(
         config.calibration.target_sec, config.calibration.max_sec,
@@ -104,6 +124,7 @@ def run(config_path: Path, replay_path: Path | None = None) -> None:
         config.behavior_detector,
         model_path=str(_resolve(config.behavior_detector.model_path)),
         manifest_path=str(_resolve(config.behavior_detector.manifest_path)),
+        ncnn_num_threads=config.ncnn_num_threads,
     )
     try:
         behavior_detector = YoloBehaviorDetector(
@@ -216,10 +237,13 @@ def run(config_path: Path, replay_path: Path | None = None) -> None:
                 break
             if source_kind == "replay":
                 publish_frame(packet)
-            behavior_detector.submit(packet)
             perception_started = time.perf_counter()
             signal = perception.process(packet)
             perception_ms = (time.perf_counter() - perception_started) * 1000
+            behavior_detector.submit(
+                packet,
+                face_bbox_xyxy=perception.latest_face_bbox_xyxy,
+            )
             processed += 1
             event_emitted = False
             calibration = calibrator.update(signal)
@@ -497,6 +521,10 @@ def main() -> None:
     parser.add_argument("--verify-bundle", type=Path)
     args = parser.parse_args()
     if args.verify_bundle:
+        _apply_thread_caps(RuntimeConfig())
+        from dms_final_system.runtime.model.bundle import verify_bundle
+        from dms_final_system.runtime.model.predictor import LightGBMRuntimePredictor
+
         info = verify_bundle(args.verify_bundle)
         predictor = LightGBMRuntimePredictor(args.verify_bundle, verify=False)
         print({**info, **predictor.verify_golden_samples()})
