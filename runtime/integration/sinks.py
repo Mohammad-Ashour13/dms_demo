@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from abc import ABC, abstractmethod
 from pathlib import Path
 
@@ -20,7 +21,13 @@ class FilesystemOutboxSink(IncidentSink):
         if path.is_file():
             payload = json.loads(path.read_text(encoding="utf-8"))
         payload.update(incident.to_dict())
-        path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+        temporary = path.with_suffix(".json.tmp")
+        temporary.write_text(
+            json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        with temporary.open("rb") as handle:
+            os.fsync(handle.fileno())
+        temporary.replace(path)
 
 
 class CompanyUploadAdapter(IncidentSink):

@@ -1,0 +1,27 @@
+{
+  "export_format": "ncnn",
+  "source_model": "best_yolo11n.pt",
+  "source_sha256": "37ab5aeee2c4f655fcbe733195e53cff8c4ea03ab36accd064d1bee4b22c0c9d",
+  "source_classes": [
+    "cigarette",
+    "closed_eyes",
+    "drink_or_food",
+    "hand_near_head",
+    "inattentive_gaze",
+    "open_mouth",
+    "phone"
+  ],
+  "imgsz": 640,
+  "half": false,
+  "created_by": "dms_final_system.runtime.objects.export_ncnn",
+  "exporter_versions": {
+    "ultralytics": "8.4.117",
+    "torch": "2.13.0+cpu",
+    "ncnn": "1.0.20260526",
+    "pnnx": "20260526"
+  },
+  "artifacts_sha256": {
+    "model.ncnn.bin": "cd6599db259b1385e24f896f6115a019090cee014973ec3da056f9c4c53c8686",
+    "model.ncnn.param": "d7a303bd8906cff57c3323c40b92ba9658bed504779aabe96273289448d43d31"
+  }
+}

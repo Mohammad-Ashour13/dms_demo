@@ -21,6 +21,7 @@ class LatestFrameCapture:
         self.thread: threading.Thread | None = None
         self.stop_event = threading.Event()
         self.dropped_frames = 0
+        self.captured_frames = 0
         self.frame_sink = frame_sink
 
     def start(self) -> "LatestFrameCapture":
@@ -33,6 +34,23 @@ class LatestFrameCapture:
         self.thread = threading.Thread(target=self._reader, name="camera-capture", daemon=True)
         self.thread.start()
         return self
+
+    @property
+    def actual_configuration(self) -> dict:
+        if self.capture is None:
+            return {
+                "backend": "opencv",
+                "width": self.width,
+                "height": self.height,
+                "fps": self.fps,
+            }
+        return {
+            "backend": "opencv",
+            "width": int(self.capture.get(cv2.CAP_PROP_FRAME_WIDTH) or self.width),
+            "height": int(self.capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or self.height),
+            "fps": float(self.capture.get(cv2.CAP_PROP_FPS) or self.fps),
+            "source": self.source,
+        }
 
     def _reader(self) -> None:
         frame_id = 0
@@ -51,6 +69,7 @@ class LatestFrameCapture:
                 frame=frame,
             )
             frame_id += 1
+            self.captured_frames = frame_id
             if self.frame_sink is not None:
                 self.frame_sink(packet)
             if self.queue.full():
@@ -92,6 +111,7 @@ class ReplayCapture:
         native = self.capture.get(cv2.CAP_PROP_FPS)
         self.fps = target_fps or (native if native > 0 else 15.0)
         self.frame_id = 0
+        self.captured_frames = 0
         self.started = time.monotonic()
 
     def read(self, timeout: float = 1.0) -> FramePacket:
@@ -106,11 +126,22 @@ class ReplayCapture:
             frame=frame,
         )
         self.frame_id += 1
+        self.captured_frames = self.frame_id
         return packet
 
     @property
     def dropped_frames(self) -> int:
         return 0
+
+    @property
+    def actual_configuration(self) -> dict:
+        return {
+            "backend": "replay",
+            "path": str(self.path),
+            "width": int(self.capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0),
+            "height": int(self.capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0),
+            "fps": float(self.fps),
+        }
 
     def close(self) -> None:
         self.capture.release()

@@ -1,0 +1,3 @@
+# Copy to /etc/default/safee-dms-power only after completing the benchmark ledger.
+# Accepted values: 0, 1800, 2000, 2200, 2400.
+SAFEE_CPU_MAX_MHZ=0

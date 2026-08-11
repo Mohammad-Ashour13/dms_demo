@@ -1,5 +1,8 @@
 # نظام مراقبة السائق النهائي
 
+خطة تحسين Raspberry Pi 5 ولوحة Safee ومتابعة القبول موجودة في
+[`docs/PI5_OPTIMIZATION_DASHBOARD_PLAN.md`](docs/PI5_OPTIMIZATION_DASHBOARD_PLAN.md).
+
 هذه الحزمة تفصل تدريب LightGBM على Colab عن تشغيل Raspberry Pi 5، وتربط الموديل بمحرك أحداث وFusion FSM وتسجيل فيديو للحوادث. التجارب القديمة خارج هذا الفولدر لا تُستخدم تلقائيًا.
 
 ## مسار التسليم المختصر
@@ -36,11 +39,15 @@
 
 ## أوامر التحقق المحلية
 
-من الفولدر الذي يحتوي `dms_final_system/`:
+يمكن أن يكون اسم فولدر المشروع أي اسم؛ تثبيت editable يوفر package باسم
+`dms_final_system`:
 
 ```bash
-PYTHONPATH=. python3 -m compileall -q dms_final_system
-PYTHONPATH=. pytest dms_final_system/tests
+python3 -m venv .venv
+.venv/bin/pip install -r requirements-laptop.txt
+.venv/bin/pip install -e .
+.venv/bin/python -m compileall -q runtime shared
+.venv/bin/pytest
 ```
 
 اختبارات `training_colab/tests` تشغلها Notebook بعد تثبيت متطلبات التدريب؛ لا تحتاج مكتبات sklearn/Optuna على Raspberry.

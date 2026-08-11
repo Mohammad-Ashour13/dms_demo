@@ -790,6 +790,10 @@ class YoloBehaviorDetector:
         self.execution_mode = "disabled"
         self.base_interval_sec = float(config.inference_interval_sec)
         self.effective_interval_sec = self.base_interval_sec
+        self.safe_mode_enabled = False
+        self.safe_mode_interval_sec = self.base_interval_sec
+        self.last_context_roi = float("-inf")
+        self.context_hold_until = float("-inf")
         self.last_crop_info: dict[str, Any] = {}
         self.snapshot_value = BehaviorDetectorSnapshot(
             0.0, -1, self.model_version, self.backend_name, [], [], {}, 0.0,
@@ -925,6 +929,26 @@ class YoloBehaviorDetector:
             except queue.Full:
                 self.dropped_frames += 1
 
+    def set_safe_mode(self, enabled: bool, interval_sec: float | None = None) -> None:
+        enabled = bool(enabled)
+        previous = self.safe_mode_enabled
+        self.safe_mode_enabled = enabled
+        if interval_sec is not None:
+            maximum = float(self.config.max_inference_interval_sec)
+            self.safe_mode_interval_sec = min(maximum, max(self.base_interval_sec, float(interval_sec)))
+        self.effective_interval_sec = (
+            self.safe_mode_interval_sec if enabled else self.base_interval_sec
+        )
+        if enabled != previous:
+            self.telemetry.emit(
+                "BehaviorDetector",
+                "safe_mode_changed",
+                {
+                    "enabled": enabled,
+                    "effective_interval_sec": self.effective_interval_sec,
+                },
+            )
+
     def _static_crop(self, frame: np.ndarray):
         height, width = frame.shape[:2]
         x1, y1, x2, y2 = self.config.driver_roi
@@ -1027,7 +1051,7 @@ class YoloBehaviorDetector:
         return self._face_crop(frame, face_bbox_xyxy)
 
     def _update_effective_interval(self, inference_ms: float, timestamp: float, frame_id: int) -> None:
-        if not self.config.adaptive_interval:
+        if not self.config.adaptive_interval or self.safe_mode_enabled:
             return
         old = float(self.effective_interval_sec)
         budget = float(self.config.latency_budget_ms)
@@ -1071,7 +1095,26 @@ class YoloBehaviorDetector:
             frame_id, timestamp, frame, face_bbox_xyxy = item
             started = time.perf_counter()
             try:
-                crop, offset_x, offset_y, crop_info = self._crop(frame, face_bbox_xyxy)
+                context_interval = float(
+                    getattr(self.config, "context_roi_interval_sec", 2.0)
+                )
+                context_due = timestamp - self.last_context_roi >= context_interval
+                context_followup = timestamp <= self.context_hold_until
+                if (
+                    str(self.config.roi_mode).lower() == "face"
+                    and (context_due or context_followup)
+                ):
+                    crop, offset_x, offset_y, crop_info = self._static_crop(frame)
+                    crop_info["mode"] = (
+                        "context_reacquisition" if context_due else "context_followup"
+                    )
+                    crop_info["context_interval_sec"] = context_interval
+                    if context_due:
+                        self.last_context_roi = timestamp
+                else:
+                    crop, offset_x, offset_y, crop_info = self._crop(
+                        frame, face_bbox_xyxy
+                    )
                 self.last_crop_info = dict(crop_info)
                 raw = self.backend.predict(
                     crop,
@@ -1095,6 +1138,16 @@ class YoloBehaviorDetector:
                     if detection.label in self.config.class_mapping
                     and detection.confidence >= self.config.class_thresholds[detection.label]
                 ]
+                if (
+                    crop_info.get("mode")
+                    in {"context_reacquisition", "context_followup"}
+                    and detections
+                ):
+                    self.context_hold_until = max(
+                        self.context_hold_until,
+                        timestamp + float(self.config.temporal_window_sec),
+                    )
+                    crop_info["context_hold_until"] = self.context_hold_until
                 active, ratios, events = self.filter.update(
                     timestamp, detections, frame_id=frame_id
                 )

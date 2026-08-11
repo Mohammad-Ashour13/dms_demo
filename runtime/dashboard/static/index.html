@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#22985a">
+  <title>Safee Driver Monitoring</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <img src="/static/safee-logo.svg" alt="Safee Tracking System" class="logo">
+    <div class="system-badge"><span id="health-dot"></span><span id="health-label">Starting</span></div>
+  </header>
+  <main>
+    <section class="hero-grid">
+      <article class="camera-card panel">
+        <div class="panel-title"><span>Driver camera</span><span id="camera-resolution">—</span></div>
+        <div class="camera-wrap"><img id="camera" src="/stream.mjpg" alt="Live driver camera"></div>
+        <div class="camera-meta"><span id="camera-fps">0 FPS</span><span id="capture-drop">0 dropped</span></div>
+      </article>
+      <article class="state-card panel" id="state-card">
+        <div class="eyebrow">Current driver state</div>
+        <div id="driver-state" class="driver-state">STARTING</div>
+        <div id="active-violations" class="violation-list">No active violations</div>
+        <div class="probability"><span>Model risk</span><strong id="model-probability">—</strong></div>
+        <div class="probability-bar"><i id="probability-fill"></i></div>
+      </article>
+    </section>
+
+    <section class="metric-grid">
+      <article class="metric panel"><span>AI FPS</span><strong id="ai-fps">—</strong><small>Core perception loop</small></article>
+      <article class="metric panel"><span>CPU temperature</span><strong id="temperature">—</strong><small id="power-mode">Normal power mode</small></article>
+      <article class="metric panel"><span>CPU / RAM</span><strong id="cpu-ram">—</strong><small id="cpu-clock">—</small></article>
+      <article class="metric panel"><span>Storage free</span><strong id="storage-free">—</strong><small id="incident-count">0 incidents</small></article>
+    </section>
+
+    <section class="pipeline-grid panel">
+      <div><span>Capture</span><strong id="capture-fps">—</strong><small id="capture-queue">queue —</small></div>
+      <div><span>Core AI</span><strong id="core-fps">—</strong><small>latest-frame loop</small></div>
+      <div><span>YOLO</span><strong id="yolo-fps">—</strong><small id="yolo-latency">p95 —</small></div>
+      <div><span>Recorder</span><strong id="recorder-fps">—</strong><small id="recorder-drop">0 dropped</small></div>
+      <div><span>Preview</span><strong id="preview-fps">—</strong><small id="preview-clients">0 clients</small></div>
+      <div><span>Decision</span><strong id="decision-age">—</strong><small id="fusion-latency">Fusion p95 —</small></div>
+    </section>
+
+    <section class="detail-grid">
+      <article class="panel chart-panel">
+        <div class="panel-title"><span>Performance — last 60 samples</span><span id="safe-mode-label">NORMAL</span></div>
+        <canvas id="performance-chart" width="760" height="210"></canvas>
+        <div class="legend"><span class="fps-line">AI FPS</span><span class="temp-line">Temperature</span></div>
+      </article>
+      <article class="panel model-panel">
+        <div class="panel-title">Model stack</div>
+        <dl>
+          <dt>Drowsiness</dt><dd id="drowsiness-model">—</dd>
+          <dt>Behavior</dt><dd id="behavior-model">—</dd>
+          <dt>Backend</dt><dd id="behavior-backend">—</dd>
+          <dt>Feature contract</dt><dd id="feature-version">—</dd>
+          <dt>Fusion</dt><dd id="fusion-version">—</dd>
+          <dt>Drift</dt><dd id="drift-status">—</dd>
+          <dt>Power flags</dt><dd id="power-flags">—</dd>
+          <dt>License</dt><dd id="license-status">—</dd>
+        </dl>
+      </article>
+    </section>
+
+    <section class="panel incidents-panel">
+      <div class="panel-title"><span>Recent local incidents</span><span>Read-only evidence index</span></div>
+      <div class="table-wrap">
+        <table><thead><tr><th>Time</th><th>State</th><th>Triggers</th><th>Duration</th><th>Size</th></tr></thead><tbody id="incident-table"><tr><td colspan="5">No incidents saved</td></tr></tbody></table>
+      </div>
+    </section>
+  </main>
+  <footer>Safee edge runtime · Local network dashboard · No cloud upload</footer>
+  <script src="/static/app.js" defer></script>
+</body>
+</html>

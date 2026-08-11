@@ -147,6 +147,11 @@ class _Backend:
         return [_detection("phone", 0.9)]
 
 
+class _EmptyBackend(_Backend):
+    def predict(self, frame, **kwargs):
+        return []
+
+
 def _detector_config(tmp_path, **overrides):
     model = tmp_path / "dummy.pt"
     model.write_bytes(b"dummy")
@@ -241,7 +246,7 @@ def test_adaptive_interval_grows_and_shrinks_with_latency_budget(tmp_path):
         ),
         EvidenceBus(),
         telemetry,
-        backend=_Backend(),
+        backend=_EmptyBackend(),
     )
     try:
         base = detector.effective_interval_sec
@@ -255,12 +260,79 @@ def test_adaptive_interval_grows_and_shrinks_with_latency_budget(tmp_path):
         detector.close()
 
 
+def test_context_detection_holds_context_long_enough_for_temporal_samples(tmp_path):
+    detector = YoloBehaviorDetector(
+        _detector_config(
+            tmp_path,
+            roi_mode="face",
+            context_roi_interval_sec=2.0,
+            adaptive_interval=False,
+        ),
+        EvidenceBus(),
+        _Telemetry(),
+        backend=_Backend(),
+    )
+    frame = np.zeros((100, 160, 3), dtype=np.uint8)
+    try:
+        for frame_id, timestamp in enumerate((1.0, 1.5, 2.0, 2.5), start=1):
+            detector.submit(
+                FramePacket(frame_id, "utc", timestamp, frame),
+                (60, 30, 100, 70),
+            )
+            deadline = time.monotonic() + 1.0
+            while (
+                detector.snapshot().frame_id != frame_id
+                and time.monotonic() < deadline
+            ):
+                time.sleep(0.01)
+            expected = "context_reacquisition" if frame_id == 1 else "context_followup"
+            assert detector.last_crop_info["mode"] == expected
+        assert detector.snapshot().active_behaviors == ["PHONE_USE"]
+    finally:
+        detector.close()
+
+
+def test_face_roi_periodically_reacquires_driver_context(tmp_path):
+    detector = YoloBehaviorDetector(
+        _detector_config(
+            tmp_path,
+            roi_mode="face",
+            context_roi_interval_sec=1.0,
+            adaptive_interval=False,
+        ),
+        EvidenceBus(),
+        _Telemetry(),
+        backend=_EmptyBackend(),
+    )
+    frame = np.zeros((100, 160, 3), dtype=np.uint8)
+    try:
+        detector.submit(FramePacket(1, "utc", 1.0, frame), (60, 30, 100, 70))
+        deadline = time.monotonic() + 1.0
+        while detector.snapshot().frame_id != 1 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert detector.last_crop_info["mode"] == "context_reacquisition"
+
+        detector.submit(FramePacket(2, "utc", 1.1, frame), (60, 30, 100, 70))
+        deadline = time.monotonic() + 1.0
+        while detector.snapshot().frame_id != 2 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert detector.last_crop_info["mode"] == "face"
+
+        detector.submit(FramePacket(3, "utc", 2.1, frame), (60, 30, 100, 70))
+        deadline = time.monotonic() + 1.0
+        while detector.snapshot().frame_id != 3 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert detector.last_crop_info["mode"] == "context_reacquisition"
+    finally:
+        detector.close()
+
+
 def test_downloaded_model_manifest_checksum_and_async_contract_are_valid():
     config = BehaviorDetectorConfig(
         enabled=True,
         required=True,
-        model_path="dms_final_system/models/driver_behavior/luthfi_yolo11n/best_yolo11n.pt",
-        manifest_path="dms_final_system/models/driver_behavior/luthfi_yolo11n/model_manifest.json",
+        model_path="models/driver_behavior/luthfi_yolo11n/best_yolo11n.pt",
+        manifest_path="models/driver_behavior/luthfi_yolo11n/model_manifest.json",
         inference_interval_sec=0.01,
     )
     telemetry = _Telemetry()
