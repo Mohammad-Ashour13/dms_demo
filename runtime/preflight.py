@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib.util
 import hashlib
 import json
 import shutil
@@ -25,11 +24,40 @@ def run_preflight(config, resolve, *, replay=False) -> dict:
             f"Active model descriptor is missing: {active_model}. Run runtime.model.activate first."
         )
 
-    if not replay and config.camera.backend == "picamera2":
-        available = importlib.util.find_spec("picamera2") is not None
-        checks["picamera2_available"] = available
-        if not available:
-            errors.append("Picamera2 is unavailable for configured CSI camera backend")
+    if not replay and config.camera.backend in {
+        "picamera2",
+        "picamera2_auto",
+        "picamera2_process",
+    }:
+        from dms_final_system.runtime.capture.picamera2_process import (
+            in_process_picamera2_available,
+            probe_system_picamera2,
+        )
+
+        in_process = in_process_picamera2_available()
+        use_process = config.camera.backend == "picamera2_process" or (
+            config.camera.backend == "picamera2_auto" and not in_process
+        )
+        checks["picamera2_in_process_available"] = in_process
+        checks["picamera2_selected_backend"] = (
+            "system_process" if use_process else "in_process"
+        )
+        if config.camera.backend == "picamera2" and not in_process:
+            errors.append("Picamera2 is unavailable for configured in-process CSI backend")
+        elif use_process:
+            try:
+                cameras = probe_system_picamera2(
+                    config.camera.system_python,
+                    config.camera.startup_timeout_sec,
+                )
+                checks["picamera2_cameras"] = cameras
+                checks["picamera2_system_python"] = config.camera.system_python
+                if int(config.camera.camera_num) >= len(cameras):
+                    errors.append(
+                        f"Configured CSI camera {config.camera.camera_num} is unavailable"
+                    )
+            except Exception as exc:
+                errors.append(f"Could not enumerate system Picamera2 cameras: {exc}")
         else:
             try:
                 from picamera2 import Picamera2

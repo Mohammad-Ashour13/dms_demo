@@ -1,13 +1,15 @@
 {
   "camera": {
-    "backend": "picamera2",
+    "backend": "picamera2_auto",
     "camera_num": 0,
     "source": 0,
     "width": 640,
     "height": 480,
     "fps": 15.0,
     "ai_queue_size": 2,
-    "pixel_format": "BGR888"
+    "pixel_format": "BGR888",
+    "system_python": "/usr/bin/python3",
+    "startup_timeout_sec": 15.0
   },
   "perception": {
     "face_landmarker_path": "models/mediapipe/face_landmarker.task",

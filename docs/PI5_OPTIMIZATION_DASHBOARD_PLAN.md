@@ -22,6 +22,7 @@ The face/upper-body crop improves object scale; it does not claim to reduce fixe
 
 - [x] Installable `dms-final-system` package with console commands, independent of checkout folder name.
 - [x] Picamera2/libcamera CSI adapter with headless configuration, actual-configuration reporting, monotonic timestamps, and latest-only queues.
+- [x] Mixed-Python compatibility: `picamera2_auto` falls back to a bounded raw-frame worker under the Raspberry Pi OS Python when the AI environment and system libcamera ABIs differ (for example Trixie Python 3.13 with an AI Python 3.12 environment). No on-device libcamera compilation is required.
 - [x] OpenCV retained only for laptop/live compatibility and replay.
 - [x] MediaPipe processing width remains 256.
 - [x] YOLO interval defaults to 0.50 seconds, is capped at 0.75 seconds, and configuration rejects an interval that cannot provide three samples in 1.5 seconds.
@@ -125,7 +126,7 @@ Selection rule: choose the lowest ceiling whose best whole-pipeline thread count
 
 | Gate | Required | Current result |
 |---|---|---|
-| Existing and new automated tests | All pass | **PASS — 86 passed** |
+| Existing and new automated tests | All pass | **PASS — 88 passed** |
 | Golden LightGBM parity/checksums | Exact/tolerance 1e-6 | **PASS — 12 samples; raw error 0; calibrated error 1.11e-16** |
 | Feature/event/Fusion/alarm replay | No semantic/timing regression | Pending annotated/golden replay run |
 | Recorder | One JPEG encode; no decode/H.264; valid MJPEG MP4/SHA256; 10±0.5 sec; atomic | **PASS — automated media/identity/retention/recovery tests** |

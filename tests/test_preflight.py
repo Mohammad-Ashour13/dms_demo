@@ -7,6 +7,7 @@ import pytest
 
 from dms_final_system.runtime.config import RuntimeConfig, load_config
 from dms_final_system.runtime.preflight import run_preflight
+import dms_final_system.runtime.capture.picamera2_process as process_capture_module
 
 
 def test_preflight_reports_missing_active_descriptor(tmp_path):
@@ -69,3 +70,28 @@ def test_pi5_model_and_copy_mux_preflight_pass_for_replay():
         "model.ncnn.bin",
         "model.ncnn.param",
     }
+
+
+def test_preflight_auto_selects_system_picamera2_for_mixed_python(
+    monkeypatch, tmp_path
+):
+    active = tmp_path / "active.json"
+    active.write_text('{"deployment_mode":"SHADOW"}', encoding="utf-8")
+    monkeypatch.setattr(
+        process_capture_module,
+        "in_process_picamera2_available",
+        lambda: False,
+    )
+    monkeypatch.setattr(
+        process_capture_module,
+        "probe_system_picamera2",
+        lambda _python, _timeout: [{"Model": "imx219", "Num": 0}],
+    )
+    config = RuntimeConfig()
+    config.active_model_path = str(active)
+    config.camera.backend = "picamera2_auto"
+    config.recorder.enabled = False
+    result = run_preflight(config, lambda value: Path(value), replay=False)
+    assert result["picamera2_in_process_available"] is False
+    assert result["picamera2_selected_backend"] == "system_process"
+    assert result["picamera2_cameras"][0]["Model"] == "imx219"

@@ -25,7 +25,7 @@ def _decision(state="NORMAL", violations=()):
 
 def test_pi5_profile_has_fixed_camera_recording_dashboard_and_power_contracts():
     config = load_config("configs/runtime.raspberry_pi5.json")
-    assert config.camera.backend == "picamera2"
+    assert config.camera.backend == "picamera2_auto"
     assert (config.camera.width, config.camera.height, config.camera.fps) == (640, 480, 15.0)
     assert config.perception.process_width == 256
     assert config.behavior_detector.inference_interval_sec == 0.5

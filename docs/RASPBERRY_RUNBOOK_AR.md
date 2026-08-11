@@ -2,6 +2,13 @@
 
 الهدف الإنتاجي هو Raspberry Pi OS Bookworm 64-bit Lite مع كاميرا CSI عبر Picamera2، وليس USB/OpenCV. المرجع الذي يحتوي checklist ونتائج القياس ومخاطر الطاقة هو [`PI5_OPTIMIZATION_DASHBOARD_PLAN.md`](PI5_OPTIMIZATION_DASHBOARD_PLAN.md).
 
+إذا كان النظام Trixie وبيئة الذكاء الاصطناعي تستخدم إصدار Python مختلفًا عن
+`/usr/bin/python3`، لا تحاول بناء `libcamera` على الجهاز. الإعداد
+`picamera2_auto` يفحص التوافق تلقائيًا: يستخدم Picamera2 داخل العملية عندما يكون
+الـABI متطابقًا، وإلا يشغّل عامل كاميرا صغيرًا بواسطة Python النظام ويرسل أحدث
+إطار BGR فقط إلى بيئة الذكاء الاصطناعي عبر قناة محدودة. لا يتطلب هذا العامل
+بيئة جديدة أو تثبيت `rpi-libcamera` عبر pip.
+
 ## التثبيت
 
 ضع المشروع افتراضيًا في `/opt/safee-dms` ثم:

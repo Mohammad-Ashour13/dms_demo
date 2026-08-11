@@ -16,6 +16,8 @@ class CameraConfig:
     fps: float = 15.0
     ai_queue_size: int = 2
     pixel_format: str = "BGR888"
+    system_python: str = "/usr/bin/python3"
+    startup_timeout_sec: float = 15.0
 
 
 @dataclass(slots=True)
@@ -364,10 +366,20 @@ def load_config(path: Path) -> RuntimeConfig:
     ) <= 0:
         raise ValueError("perception eye pixel-resolution thresholds must be positive")
     config.camera.backend = str(config.camera.backend).lower()
-    if config.camera.backend not in {"opencv", "picamera2"}:
-        raise ValueError("camera.backend must be opencv or picamera2")
+    if config.camera.backend not in {
+        "opencv",
+        "picamera2",
+        "picamera2_auto",
+        "picamera2_process",
+    }:
+        raise ValueError(
+            "camera.backend must be opencv, picamera2, picamera2_auto, or "
+            "picamera2_process"
+        )
     if min(config.camera.width, config.camera.height, config.camera.ai_queue_size) <= 0 or config.camera.fps <= 0:
         raise ValueError("camera dimensions, fps and queue size must be positive")
+    if config.camera.startup_timeout_sec <= 0:
+        raise ValueError("camera.startup_timeout_sec must be positive")
     if not 0 <= config.fusion.perclos_exit < config.fusion.perclos_warning <= 1:
         raise ValueError("fusion PERCLOS thresholds must satisfy 0 <= exit < enter <= 1")
     if not 0 < config.fusion.precritical_drowsy_closure_sec < config.events.prolonged_closure_sec:
