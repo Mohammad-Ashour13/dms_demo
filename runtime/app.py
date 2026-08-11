@@ -30,6 +30,27 @@ def _resolve(path: str | Path) -> Path:
     return candidate if candidate.is_absolute() else SYSTEM_ROOT / candidate
 
 
+def _normalize_face_bbox(
+    face_detected: bool,
+    bbox_xyxy: tuple[float, float, float, float] | None,
+    frame_width: int,
+    frame_height: int,
+) -> list[float] | None:
+    """Convert the current pixel bbox to the dashboard's resolution-free contract."""
+    if not face_detected or bbox_xyxy is None:
+        return None
+    x1, y1, x2, y2 = bbox_xyxy
+    width = max(int(frame_width), 1)
+    height = max(int(frame_height), 1)
+    normalized = [
+        max(0.0, min(1.0, float(x1) / width)),
+        max(0.0, min(1.0, float(y1) / height)),
+        max(0.0, min(1.0, float(x2) / width)),
+        max(0.0, min(1.0, float(y2) / height)),
+    ]
+    return normalized if normalized[2] > normalized[0] and normalized[3] > normalized[1] else None
+
+
 def _apply_thread_caps(config: RuntimeConfig) -> None:
     omp_threads = str(int(config.omp_num_threads))
     os.environ["OMP_NUM_THREADS"] = omp_threads
@@ -593,6 +614,13 @@ def run(config_path: Path, replay_path: Path | None = None) -> None:
             if packet.monotonic_sec - last_status >= status_interval:
                 last_status = packet.monotonic_sec
                 camera_configuration = getattr(capture, "actual_configuration", {})
+                frame_height, frame_width = packet.frame.shape[:2]
+                face_bbox_normalized = _normalize_face_bbox(
+                    signal.face_detected,
+                    perception.latest_face_bbox_xyxy,
+                    frame_width,
+                    frame_height,
+                )
                 status = status_store.update(
                     runtime={
                         "status": "RUNNING",
@@ -610,6 +638,11 @@ def run(config_path: Path, replay_path: Path | None = None) -> None:
                         "probability": decision.smoothed_probability,
                         "reason_codes": list(decision.reason_codes),
                         "alarm": alarm_status.to_dict(),
+                        "face_detected": signal.face_detected,
+                        "face_quality": signal.face_quality,
+                        "face_bbox_normalized": face_bbox_normalized,
+                        "face_bbox_frame_id": perception.latest_face_bbox_frame_id,
+                        "driver_distance_status": signal.driver_distance_status,
                     },
                     camera={
                         "backend": camera_configuration.get("backend", source_kind),

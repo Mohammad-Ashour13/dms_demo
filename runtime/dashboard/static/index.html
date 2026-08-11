@@ -16,7 +16,11 @@
     <section class="hero-grid">
       <article class="camera-card panel">
         <div class="panel-title"><span>Driver camera</span><span id="camera-resolution">—</span></div>
-        <div class="camera-wrap"><img id="camera" src="/stream.mjpg" alt="Live driver camera"></div>
+        <div class="camera-wrap">
+          <img id="camera" src="/stream.mjpg" alt="Live driver camera">
+          <div id="face-box" class="face-box" aria-hidden="true"><span>FACE DETECTED</span></div>
+          <div id="face-status" class="face-status face-missing">NO FACE</div>
+        </div>
         <div class="camera-meta"><span id="camera-fps">0 FPS</span><span id="capture-drop">0 dropped</span></div>
       </article>
       <article class="state-card panel" id="state-card">

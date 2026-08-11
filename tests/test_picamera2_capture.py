@@ -39,7 +39,7 @@ class _Camera:
         self.configuration = configuration
 
     def camera_configuration(self):
-        return {"main": {"size": (64, 48), "format": "BGR888"}}
+        return {"main": {"size": (64, 48), "format": "RGB888"}}
 
     def start(self, show_preview=False):
         assert show_preview is False
@@ -64,7 +64,7 @@ def test_picamera2_adapter_applies_fixed_headless_configuration(monkeypatch):
         height=48,
         fps=15.0,
         queue_size=1,
-        pixel_format="BGR888",
+        pixel_format="RGB888",
     ).start()
     try:
         packet = capture.read(timeout=1.0)
@@ -78,7 +78,7 @@ def test_picamera2_adapter_applies_fixed_headless_configuration(monkeypatch):
             "requested_fps": 15.0,
             "width": 64,
             "height": 48,
-            "format": "BGR888",
+            "format": "RGB888",
             "fps": 15.0,
             "frame_duration_limits_us": [66667, 66667],
             "actual_frame_duration_us": None,

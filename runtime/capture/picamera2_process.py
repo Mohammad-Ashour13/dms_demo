@@ -77,7 +77,7 @@ class Picamera2ProcessCapture:
         fps=15.0,
         queue_size=2,
         frame_sink: Callable[[FramePacket], None] | None = None,
-        pixel_format="BGR888",
+        pixel_format="RGB888",
         system_python="/usr/bin/python3",
         startup_timeout_sec=15.0,
     ):

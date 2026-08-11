@@ -20,7 +20,7 @@ class Picamera2Capture:
         fps=15.0,
         queue_size=2,
         frame_sink: Callable[[FramePacket], None] | None = None,
-        pixel_format="BGR888",
+        pixel_format="RGB888",
     ):
         self.camera_num = int(camera_num)
         self.width, self.height, self.fps = int(width), int(height), float(fps)

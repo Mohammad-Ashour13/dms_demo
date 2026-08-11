@@ -16,7 +16,7 @@ def create_live_capture(config, *, frame_sink=None):
             config.fps,
             config.ai_queue_size,
             frame_sink,
-            getattr(config, "pixel_format", "BGR888"),
+            getattr(config, "pixel_format", "RGB888"),
         ).start()
     if backend == "picamera2_process":
         return Picamera2ProcessCapture(
@@ -26,7 +26,7 @@ def create_live_capture(config, *, frame_sink=None):
             config.fps,
             config.ai_queue_size,
             frame_sink,
-            getattr(config, "pixel_format", "BGR888"),
+            getattr(config, "pixel_format", "RGB888"),
             getattr(config, "system_python", "/usr/bin/python3"),
             getattr(config, "startup_timeout_sec", 15.0),
         ).start()

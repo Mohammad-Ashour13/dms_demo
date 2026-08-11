@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from dms_final_system.runtime.app import _normalize_face_bbox
 from dms_final_system.runtime.config import PowerConfig, load_config
 from dms_final_system.runtime.monitoring import (
     RuntimeStatusStore,
@@ -27,6 +28,8 @@ def test_pi5_profile_has_fixed_camera_recording_dashboard_and_power_contracts():
     config = load_config("configs/runtime.raspberry_pi5.json")
     assert config.camera.backend == "picamera2_auto"
     assert (config.camera.width, config.camera.height, config.camera.fps) == (640, 480, 15.0)
+    # Picamera2 RGB888 is BGR-compatible in memory, as expected by OpenCV.
+    assert config.camera.pixel_format == "RGB888"
     assert config.perception.process_width == 256
     assert config.behavior_detector.inference_interval_sec == 0.5
     assert config.behavior_detector.max_inference_interval_sec == 0.75
@@ -34,6 +37,17 @@ def test_pi5_profile_has_fixed_camera_recording_dashboard_and_power_contracts():
     assert config.recorder.require_copy_mux is True
     assert config.recorder.reserve_free_bytes == 2 * 1024**3
     assert config.dashboard.enabled and config.dashboard.port == 8080
+
+
+def test_face_bbox_is_normalized_for_browser_overlay_and_hidden_without_face():
+    assert _normalize_face_bbox(True, (64.0, 48.0, 320.0, 240.0), 640, 480) == [
+        0.1,
+        0.1,
+        0.5,
+        0.5,
+    ]
+    assert _normalize_face_bbox(False, (64.0, 48.0, 320.0, 240.0), 640, 480) is None
+    assert _normalize_face_bbox(True, (20.0, 20.0, 10.0, 10.0), 640, 480) is None
 
 
 def test_invalid_yolo_temporal_sampling_contract_is_rejected(tmp_path):

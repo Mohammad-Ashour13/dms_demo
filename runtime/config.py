@@ -15,7 +15,8 @@ class CameraConfig:
     height: int = 480
     fps: float = 15.0
     ai_queue_size: int = 2
-    pixel_format: str = "BGR888"
+    # Picamera2's RGB888 memory layout is BGR-compatible with OpenCV.
+    pixel_format: str = "RGB888"
     system_python: str = "/usr/bin/python3"
     startup_timeout_sec: float = 15.0
 

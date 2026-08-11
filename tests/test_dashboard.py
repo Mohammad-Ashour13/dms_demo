@@ -51,6 +51,12 @@ def test_dashboard_read_only_health_status_and_incident_apis(tmp_path):
             assert (await health.json())["healthy"] is True
             status = await client.get("/api/v1/status")
             assert (await status.json())["schema_version"] == "dashboard-status-v1"
+            home = await client.get("/")
+            home_text = await home.text()
+            assert 'id="face-box"' in home_text
+            assert 'id="face-status"' in home_text
+            script = await client.get("/static/app.js")
+            assert "face_bbox_normalized" in await script.text()
             incidents = await client.get("/api/v1/incidents?limit=invalid")
             payload = await incidents.json()
             assert payload["schema_version"] == "incident-list-v1"

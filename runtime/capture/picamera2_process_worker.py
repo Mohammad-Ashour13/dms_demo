@@ -2,7 +2,9 @@
 
 This file intentionally imports no DMS modules.  It is executed by the Raspberry
 Pi OS system Python so its compiled libcamera binding always matches the OS.
-Frames are sent as fixed-size BGR packets to the AI runtime over stdout.
+Frames are sent as fixed-size OpenCV-compatible BGR packets to the AI runtime
+over stdout. Picamera2's ``RGB888`` format has that in-memory byte order, so the
+production profile avoids a per-frame channel conversion.
 """
 
 from __future__ import annotations
@@ -107,7 +109,7 @@ def main() -> int:
     parser.add_argument("--width", type=int, default=640)
     parser.add_argument("--height", type=int, default=480)
     parser.add_argument("--fps", type=float, default=15.0)
-    parser.add_argument("--pixel-format", default="BGR888")
+    parser.add_argument("--pixel-format", default="RGB888")
     args = parser.parse_args()
     return _probe() if args.probe else _stream(args)
 
