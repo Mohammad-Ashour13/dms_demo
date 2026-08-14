@@ -4,6 +4,7 @@ import queue
 import threading
 import time
 import uuid
+import warnings
 from collections import deque
 
 from dms_final_system.shared.contracts import AlarmCommand, AlarmStatus, DriverState
@@ -38,16 +39,24 @@ class AlarmController:
         self.command_history: list[AlarmCommand] = []
         self.worker = threading.Thread(target=self._run, name="alarm-output", daemon=True)
         ok, detail = self.output.probe()
-        if self.audible and not ok and config.required:
-            raise RuntimeError(f"Required alarm audio output is unavailable: {detail}")
+        audio_unavailable = bool(self.audible and not ok)
         self.audible = bool(self.audible and ok)
         self.status.backend_health = "READY" if self.audible else ("LOG_ONLY" if config.enabled else "DISABLED")
         self.status.last_error = "" if ok else detail
         self.telemetry.emit(
             "Alarm", "output_probe",
             {"audible": self.audible, "mode": config.mode, "backend": detail, "required": config.required},
-            level="INFO" if ok or not config.required else "ERROR",
+            level="ERROR" if audio_unavailable and config.required else ("WARNING" if audio_unavailable else "INFO"),
         )
+        if audio_unavailable:
+            if config.required:
+                self.output.close()
+                raise RuntimeError(f"Required alarm audio output is unavailable: {detail}")
+            warnings.warn(
+                f"Alarm audio is unavailable; continuing in LOG_ONLY mode: {detail}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
         if self.audible and config.startup_self_test:
             command = AlarmCommand(
                 "alarm-startup-self-test", "alarm-startup-self-test",
@@ -63,12 +72,19 @@ class AlarmController:
                 self.status.last_error = repr(exc)
                 self.telemetry.emit(
                     "Alarm", "audio_self_test_failed",
-                    {**command.to_dict(), "error": repr(exc)}, level="ERROR",
+                    {**command.to_dict(), "error": repr(exc)},
+                    level="ERROR" if config.required else "WARNING",
                 )
                 self.audible = False
                 if config.required:
                     self.output.close()
                     raise RuntimeError(f"Required alarm audio self-test failed: {exc}") from exc
+                self.status.backend_health = "LOG_ONLY"
+                warnings.warn(
+                    f"Alarm audio self-test failed; continuing in LOG_ONLY mode: {exc}",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
         self.worker.start()
 
     def _emit(self, event: str, payload: dict, command: AlarmCommand | None = None, level="INFO") -> None:

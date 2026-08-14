@@ -4,6 +4,7 @@ import math
 import shutil
 import struct
 import subprocess
+import sys
 import tempfile
 import threading
 import wave
@@ -46,10 +47,11 @@ class NullAlarmOutput(AlarmOutput):
         return None
 
 
-class LinuxAudioOutput(AlarmOutput):
-    """Dependency-free PCM output using the first available Linux player."""
+class PlatformAudioOutput(AlarmOutput):
+    """Dependency-free local WAV output for Windows and Linux."""
 
-    BACKENDS = ("aplay", "paplay", "pw-play", "ffplay")
+    LINUX_BACKENDS = ("aplay", "paplay", "pw-play", "ffplay")
+    WINDOWS_BACKEND = "winsound"
 
     def __init__(self, backend="auto", device="default", master_gain=0.40):
         self.requested_backend = str(backend).lower()
@@ -57,14 +59,16 @@ class LinuxAudioOutput(AlarmOutput):
         self.master_gain = float(master_gain)
         self.backend: str | None = None
         self.process: subprocess.Popen | None = None
+        self.winsound = None
         self.lock = threading.Lock()
         self.audio_dir = Path(tempfile.gettempdir()) / "dms_alarm_audio"
         self.audio_dir.mkdir(parents=True, exist_ok=True)
         self.files: dict[str, Path] = {}
+        self.durations: dict[str, float] = {}
 
     def probe(self) -> tuple[bool, str]:
-        candidates = self.BACKENDS if self.requested_backend == "auto" else (self.requested_backend,)
-        self.backend = next((item for item in candidates if shutil.which(item)), None)
+        candidates = self._candidates()
+        self.backend = next((item for item in candidates if self._available(item)), None)
         if self.backend is None:
             return False, f"no supported audio player found ({', '.join(candidates)})"
         for name, pattern in ALARM_PATTERNS.items():
@@ -72,6 +76,25 @@ class LinuxAudioOutput(AlarmOutput):
             self._write_wav(path, pattern)
             self.files[name] = path
         return True, self.backend
+
+    def _candidates(self) -> tuple[str, ...]:
+        if self.requested_backend != "auto":
+            return (self.requested_backend,)
+        if sys.platform == "win32":
+            return (self.WINDOWS_BACKEND, *self.LINUX_BACKENDS)
+        return self.LINUX_BACKENDS
+
+    def _available(self, backend: str) -> bool:
+        if backend != self.WINDOWS_BACKEND:
+            return bool(shutil.which(backend))
+        if sys.platform != "win32":
+            return False
+        try:
+            import winsound
+        except ImportError:
+            return False
+        self.winsound = winsound
+        return True
 
     def _write_wav(self, path: Path, pattern: TonePattern) -> None:
         rate = 44_100
@@ -92,6 +115,9 @@ class LinuxAudioOutput(AlarmOutput):
             handle.setsampwidth(2)
             handle.setframerate(rate)
             handle.writeframes(struct.pack(f"<{len(samples)}h", *samples))
+        self.durations[pattern.name] = sum(
+            pulse.duration_sec + pulse.gap_after_sec for pulse in pattern.pulses
+        )
 
     def _command(self, path: Path) -> list[str]:
         if self.backend == "aplay":
@@ -108,6 +134,19 @@ class LinuxAudioOutput(AlarmOutput):
     def play(self, command: AlarmCommand, stop_event: threading.Event) -> str:
         if self.backend is None or command.pattern not in self.files:
             raise RuntimeError("audio backend was not probed or alarm pattern is unknown")
+        if self.backend == self.WINDOWS_BACKEND:
+            if self.winsound is None:
+                raise RuntimeError("winsound backend was not initialized")
+            self.winsound.PlaySound(
+                str(self.files[command.pattern]),
+                self.winsound.SND_FILENAME
+                | self.winsound.SND_ASYNC
+                | self.winsound.SND_NODEFAULT,
+            )
+            if stop_event.wait(self.durations[command.pattern]):
+                self.stop()
+                return "PREEMPTED"
+            return "COMPLETED"
         process = subprocess.Popen(
             self._command(self.files[command.pattern]),
             stdout=subprocess.DEVNULL,
@@ -133,10 +172,17 @@ class LinuxAudioOutput(AlarmOutput):
         return "COMPLETED"
 
     def stop(self) -> None:
+        if self.backend == self.WINDOWS_BACKEND and self.winsound is not None:
+            self.winsound.PlaySound(None, 0)
+            return
         with self.lock:
             process = self.process
         if process is not None and process.poll() is None:
             process.terminate()
+
+
+# Keep the old public name available for existing callers and scripts.
+LinuxAudioOutput = PlatformAudioOutput
 
 
 class GPIOBuzzerOutput(AlarmOutput):

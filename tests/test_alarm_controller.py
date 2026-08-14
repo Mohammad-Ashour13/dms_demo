@@ -3,6 +3,8 @@ from __future__ import annotations
 import time
 from types import SimpleNamespace
 
+import pytest
+
 from dms_final_system.runtime.alarm import AlarmController, AlarmOutput
 from dms_final_system.runtime.config import AlarmConfig
 from dms_final_system.shared.contracts import AlarmLevel, DriverState, FusionDecision
@@ -135,6 +137,32 @@ def test_replay_source_can_log_commands_without_playing_audio():
         assert len(controller.command_history) == 1
         assert output.played == []
         assert any(event == "alarm_suppressed" for _, event, _, _ in telemetry.records)
+    finally:
+        controller.close()
+
+
+def test_unavailable_optional_audio_warns_and_continues_in_log_only_mode():
+    telemetry, output = FakeTelemetry(), FakeAudio(available=False)
+    config = AlarmConfig(enabled=True, mode="LOCAL", required=False, startup_self_test=False)
+    with pytest.warns(RuntimeWarning, match="continuing in LOG_ONLY mode"):
+        controller = AlarmController(config, telemetry, output, audible=True)
+    try:
+        assert controller.snapshot().backend_health == "LOG_ONLY"
+        probe = next(record for record in telemetry.records if record[1] == "output_probe")
+        assert probe[3]["level"] == "WARNING"
+    finally:
+        controller.close()
+
+
+def test_failed_optional_audio_self_test_warns_and_continues_in_log_only_mode():
+    telemetry, output = FakeTelemetry(), FakeAudio(fail=True)
+    config = AlarmConfig(enabled=True, mode="LOCAL", required=False, startup_self_test=True)
+    with pytest.warns(RuntimeWarning, match="self-test failed; continuing in LOG_ONLY mode"):
+        controller = AlarmController(config, telemetry, output, audible=True)
+    try:
+        assert controller.snapshot().backend_health == "LOG_ONLY"
+        self_test = next(record for record in telemetry.records if record[1] == "audio_self_test_failed")
+        assert self_test[3]["level"] == "WARNING"
     finally:
         controller.close()
 
