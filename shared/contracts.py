@@ -152,6 +152,28 @@ class BehaviorDetectorSnapshot:
 
 
 @dataclass(slots=True)
+class SeatbeltDetectorSnapshot:
+    """Serializable state of the low-rate seat-belt classifier."""
+
+    monotonic_sec: float
+    frame_id: int
+    model_version: str
+    backend: str
+    no_seatbelt_probability: float | None
+    seatbelt_probability: float | None
+    active_violations: list[str]
+    inference_ms: float
+    roi: dict[str, Any] = field(default_factory=dict)
+    dropped_frames: int = 0
+    health: str = "READY"
+    last_error: str = ""
+    shadow_mode: bool = True
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(slots=True)
 class FusionDecision:
     monotonic_sec: float
     previous_state: DriverState

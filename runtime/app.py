@@ -93,7 +93,7 @@ def run(config_path: Path, replay_path: Path | None = None) -> None:
     )
     from dms_final_system.runtime.model.predictor import LightGBMRuntimePredictor
     from dms_final_system.runtime.model.drift import FeatureDriftMonitor
-    from dms_final_system.runtime.objects import YoloBehaviorDetector
+    from dms_final_system.runtime.objects import SeatbeltDetector, YoloBehaviorDetector
     from dms_final_system.runtime.perception import MediaPipeFacePerception
     from dms_final_system.runtime.monitoring import (
         RuntimeStatusStore,
@@ -177,11 +177,25 @@ def run(config_path: Path, replay_path: Path | None = None) -> None:
         manifest_path=str(_resolve(config.behavior_detector.manifest_path)),
         ncnn_num_threads=config.ncnn_num_threads,
     )
+    seatbelt_config = replace(
+        config.seatbelt_detector,
+        model_path=str(_resolve(config.seatbelt_detector.model_path)),
+        manifest_path=str(_resolve(config.seatbelt_detector.manifest_path)),
+    )
+    behavior_detector = None
+    seatbelt_detector = None
     try:
         behavior_detector = YoloBehaviorDetector(
             behavior_config, evidence_bus, telemetry
         )
+        seatbelt_detector = SeatbeltDetector(
+            seatbelt_config, evidence_bus, telemetry
+        )
     except Exception:
+        if seatbelt_detector is not None:
+            seatbelt_detector.close()
+        if behavior_detector is not None:
+            behavior_detector.close()
         perception.close()
         telemetry.close()
         raise
@@ -247,6 +261,7 @@ def run(config_path: Path, replay_path: Path | None = None) -> None:
             "eye_event_version": "eye-events-v2.4",
             "drift_reference_available": drift.available,
             "behavior_detector_config": asdict(config.behavior_detector),
+            "seatbelt_detector_config": asdict(config.seatbelt_detector),
             "evaluation_config": asdict(config.evaluation),
         },
     ) if config.evaluation.enabled else None
@@ -328,7 +343,9 @@ def run(config_path: Path, replay_path: Path | None = None) -> None:
     processed = 0
     wall_started = time.monotonic()
     last_yolo_frame_id = -1
+    last_seatbelt_frame_id = -1
     yolo_inferences = 0
+    seatbelt_inferences = 0
     try:
         while True:
             try:
@@ -342,6 +359,10 @@ def run(config_path: Path, replay_path: Path | None = None) -> None:
             perception_ms = (time.perf_counter() - perception_started) * 1000
             stage_timings.record("perception", perception_ms)
             behavior_detector.submit(
+                packet,
+                face_bbox_xyxy=perception.latest_face_bbox_xyxy,
+            )
+            seatbelt_detector.submit(
                 packet,
                 face_bbox_xyxy=perception.latest_face_bbox_xyxy,
             )
@@ -431,10 +452,15 @@ def run(config_path: Path, replay_path: Path | None = None) -> None:
             incident_id = None
             alarm_status = alarm.snapshot()
             behavior_snapshot = behavior_detector.snapshot()
+            seatbelt_snapshot = seatbelt_detector.snapshot()
             if behavior_snapshot.frame_id != last_yolo_frame_id and behavior_snapshot.frame_id >= 0:
                 last_yolo_frame_id = behavior_snapshot.frame_id
                 yolo_inferences += 1
                 stage_timings.record("yolo", behavior_snapshot.inference_ms)
+            if seatbelt_snapshot.frame_id != last_seatbelt_frame_id and seatbelt_snapshot.frame_id >= 0:
+                last_seatbelt_frame_id = seatbelt_snapshot.frame_id
+                seatbelt_inferences += 1
+                stage_timings.record("seatbelt", seatbelt_snapshot.inference_ms)
             incident_policy_result = incident_policy.evaluate(packet.monotonic_sec, decision)
             if recorder and incident_policy_result.qualifies:
                 probability = decision.smoothed_probability or 0.0
@@ -462,6 +488,7 @@ def run(config_path: Path, replay_path: Path | None = None) -> None:
                         "fusion_version": config.fusion.version,
                         "alarm_status": alarm_status.to_dict(),
                         "behavior_detector": behavior_snapshot.to_dict(),
+                        "seatbelt_detector": seatbelt_snapshot.to_dict(),
                     },
                     start_new=incident_policy_result.onset,
                     trigger_kinds=incident_policy_result.trigger_kinds,
@@ -662,6 +689,7 @@ def run(config_path: Path, replay_path: Path | None = None) -> None:
                         "capture_fps": getattr(capture, "captured_frames", processed) / elapsed,
                         "ai_fps": effective_fps,
                         "yolo_fps": yolo_inferences / elapsed,
+                        "seatbelt_fps": seatbelt_inferences / elapsed,
                         "yolo_interval_sec": behavior_detector.effective_interval_sec,
                         "recorder_fps": (
                             frame_hub.encoded_frames / elapsed if frame_hub else 0.0
@@ -676,6 +704,7 @@ def run(config_path: Path, replay_path: Path | None = None) -> None:
                         "queues": {
                             "capture": getattr(getattr(capture, "queue", None), "qsize", lambda: 0)(),
                             "behavior": behavior_detector.queue.qsize(),
+                            "seatbelt": seatbelt_detector.queue.qsize(),
                             "frame_hub": frame_hub.queue.qsize() if frame_hub else 0,
                             "recorder": recorder.queue.qsize() if recorder else 0,
                             "evaluation": evaluation.queue.qsize() if evaluation else 0,
@@ -707,6 +736,10 @@ def run(config_path: Path, replay_path: Path | None = None) -> None:
                         "behavior_exporter_versions": preflight.get(
                             "ncnn_exporter_versions", {}
                         ),
+                        "seatbelt": seatbelt_snapshot.model_version,
+                        "seatbelt_backend": seatbelt_snapshot.backend,
+                        "seatbelt_health": seatbelt_snapshot.health,
+                        "seatbelt_shadow_mode": seatbelt_snapshot.shadow_mode,
                         "commercial_license_status": "BLOCKED_PENDING_SAFEE_APPROVAL",
                         "drift": last_drift.reason if last_drift else "PENDING",
                         "model_contribution_enabled": model_contribution_enabled,
@@ -721,6 +754,7 @@ def run(config_path: Path, replay_path: Path | None = None) -> None:
                         "hub_dropped_frames": frame_hub.dropped_frames if frame_hub else 0,
                         "encoder": "ffmpeg_mjpeg_copy" if recorder else "disabled",
                     },
+                    seatbelt=seatbelt_snapshot.to_dict(),
                     dashboard={
                         "healthy": dashboard.healthy,
                         "clients": dashboard.active_clients,
@@ -750,6 +784,7 @@ def run(config_path: Path, replay_path: Path | None = None) -> None:
                      "recovery_status": decision.recovery_status,
                      "alarm_status": alarm_status.to_dict(),
                      "behavior_detector": behavior_snapshot.to_dict(),
+                     "seatbelt_detector": seatbelt_snapshot.to_dict(),
                      "safe_mode": safe_mode_state.enabled,
                      "safe_mode_reason": safe_mode_state.reason,
                      "stage_latencies": stage_timings.snapshot(),
@@ -765,6 +800,7 @@ def run(config_path: Path, replay_path: Path | None = None) -> None:
         capture.close()
         perception.close()
         behavior_detector.close()
+        seatbelt_detector.close()
         hmi.close()
         alarm.close()
         if frame_hub:

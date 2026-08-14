@@ -8,6 +8,7 @@ from .yolo_behavior import (
     resolve_execution_mode,
     resolve_yolo_backend,
 )
+from .seatbelt import NcnnSeatbeltClassifierBackend, SeatbeltDetector
 
 __all__ = [
     "NcnnYoloBackend",
@@ -16,6 +17,8 @@ __all__ = [
     "ProcessIsolatedYoloBackend",
     "UltralyticsYoloBackend",
     "YoloBehaviorDetector",
+    "NcnnSeatbeltClassifierBackend",
+    "SeatbeltDetector",
     "resolve_execution_mode",
     "resolve_yolo_backend",
 ]

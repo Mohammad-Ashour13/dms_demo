@@ -154,6 +154,62 @@ def run_preflight(config, resolve, *, replay=False) -> dict:
                         errors.append("NCNN export class order does not match behavior manifest")
                 except (OSError, ValueError, TypeError) as exc:
                     errors.append(f"NCNN export manifest is invalid: {exc}")
+    seatbelt = config.seatbelt_detector
+    if seatbelt.enabled:
+        model_path = resolve(seatbelt.model_path)
+        manifest_path = resolve(seatbelt.manifest_path)
+        checks["seatbelt_model"] = str(model_path)
+        checks["seatbelt_manifest"] = str(manifest_path)
+        if not model_path.is_dir():
+            errors.append(f"Seat-belt NCNN model directory is missing: {model_path}")
+        if not manifest_path.is_file():
+            errors.append(f"Seat-belt model manifest is missing: {manifest_path}")
+        elif model_path.is_dir():
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                if manifest.get("class_names") != ["no_seatbelt", "seat_belt"]:
+                    errors.append("Seat-belt manifest must define no_seatbelt and seat_belt in that order")
+                if manifest.get("enabled_class") != {"no_seatbelt": "SEATBELT_MISSING"}:
+                    errors.append("Seat-belt manifest may enable only no_seatbelt as SEATBELT_MISSING")
+                input_spec = manifest.get("input") or {}
+                if (
+                    int(input_spec.get("width", -1)) != int(seatbelt.image_size)
+                    or int(input_spec.get("height", -1)) != int(seatbelt.image_size)
+                    or input_spec.get("color_order") != "RGB"
+                    or input_spec.get("normalization") != "scale_0_1"
+                ):
+                    errors.append("Seat-belt model input contract does not match configured image size/RGB normalization")
+                ncnn_spec = manifest.get("ncnn") or {}
+                if int(ncnn_spec.get("image_size", -1)) != int(seatbelt.image_size):
+                    errors.append("Seat-belt NCNN export image size does not match detector.image_size")
+                params = list(model_path.glob("*.param"))
+                bins = list(model_path.glob("*.bin"))
+                if len(params) != 1 or len(bins) != 1:
+                    errors.append("Seat-belt NCNN directory must contain exactly one .param and one .bin file")
+                artifact_hashes = ncnn_spec.get("artifacts_sha256") or {}
+                required_artifacts = {path.name for path in [*params, *bins]}
+                if set(artifact_hashes) != required_artifacts:
+                    errors.append("Seat-belt NCNN manifest checksum coverage is incomplete")
+                actual_hashes = {}
+                for filename, expected in artifact_hashes.items():
+                    artifact = model_path / filename
+                    actual = _sha256(artifact) if artifact.is_file() else None
+                    actual_hashes[filename] = actual
+                    if actual != expected:
+                        errors.append(f"Seat-belt NCNN artifact checksum mismatch: {filename}")
+                checks["seatbelt_ncnn_artifacts_sha256"] = actual_hashes
+                source_artifact = model_path / str(manifest.get("source_artifact", ""))
+                source_sha = manifest.get("source_sha256")
+                if not source_artifact.is_file():
+                    errors.append("Seat-belt source ONNX artifact is missing")
+                elif not source_sha or _sha256(source_artifact) != source_sha:
+                    errors.append("Seat-belt source ONNX checksum does not match its manifest")
+                try:
+                    import ncnn  # noqa: F401
+                except ImportError:
+                    errors.append("Seat-belt detector requires the ncnn Python package")
+            except (OSError, ValueError, TypeError) as exc:
+                errors.append(f"Seat-belt model manifest is invalid: {exc}")
     if errors:
         raise RuntimeError("Preflight failed:\n- " + "\n- ".join(errors))
     return checks

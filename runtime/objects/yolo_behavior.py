@@ -23,6 +23,12 @@ from dms_final_system.shared.contracts import (
 )
 
 
+# NCNN inference releases Python execution into native worker threads.  The
+# primary YOLO detector and the low-rate seat-belt classifier share this gate
+# so they do not oversubscribe a Raspberry Pi while both are enabled.
+NCNN_INFERENCE_LOCK = threading.Lock()
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -396,9 +402,10 @@ class NcnnYoloBackend:
             self.image_size,
         )
         mat.substract_mean_normalize([], [1 / 255.0, 1 / 255.0, 1 / 255.0])
-        extractor = self.net.create_extractor()
-        extractor.input(self.input_name, mat)
-        result = extractor.extract(self.output_name)
+        with NCNN_INFERENCE_LOCK:
+            extractor = self.net.create_extractor()
+            extractor.input(self.input_name, mat)
+            result = extractor.extract(self.output_name)
         if isinstance(result, tuple):
             if result[0] != 0:
                 raise RuntimeError(f"NCNN inference failed with status {result[0]}")

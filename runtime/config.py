@@ -160,6 +160,33 @@ class BehaviorDetectorConfig:
 
 
 @dataclass(slots=True)
+class SeatbeltDetectorConfig:
+    """Low-rate binary seat-belt classifier for the current driver's torso."""
+
+    enabled: bool = False
+    required: bool = False
+    model_path: str = "models/seatbelt/risef_yolov11s"
+    manifest_path: str = "models/seatbelt/risef_yolov11s/model_manifest.json"
+    image_size: int = 224
+    ncnn_num_threads: int = 1
+    inference_interval_sec: float = 2.0
+    queue_size: int = 1
+    no_seatbelt_threshold: float = 0.80
+    clear_threshold: float = 0.60
+    activation_persistence_sec: float = 4.0
+    clear_persistence_sec: float = 4.0
+    evidence_refresh_sec: float = 2.0
+    evidence_ttl_sec: float = 4.5
+    roi_width_scale: float = 2.8
+    roi_height_scale: float = 3.1
+    roi_top_offset: float = -0.15
+    roi_min_size: int = 128
+    # Shadow mode emits telemetry and dashboard status only.  It never
+    # publishes SEATBELT_MISSING into Fusion, alarms, or incident recording.
+    shadow_mode: bool = True
+
+
+@dataclass(slots=True)
 class RecorderConfig:
     enabled: bool = True
     output_dir: str = "incidents/outbox"
@@ -276,6 +303,7 @@ class RuntimeConfig:
     fusion: FusionConfig = field(default_factory=FusionConfig)
     drift: DriftConfig = field(default_factory=DriftConfig)
     behavior_detector: BehaviorDetectorConfig = field(default_factory=BehaviorDetectorConfig)
+    seatbelt_detector: SeatbeltDetectorConfig = field(default_factory=SeatbeltDetectorConfig)
     recorder: RecorderConfig = field(default_factory=RecorderConfig)
     telemetry: TelemetryConfig = field(default_factory=TelemetryConfig)
     evaluation: EvaluationConfig = field(default_factory=EvaluationConfig)
@@ -322,6 +350,7 @@ def load_config(path: Path) -> RuntimeConfig:
         "fusion": FusionConfig,
         "drift": DriftConfig,
         "behavior_detector": BehaviorDetectorConfig,
+        "seatbelt_detector": SeatbeltDetectorConfig,
         "recorder": RecorderConfig,
         "telemetry": TelemetryConfig,
         "evaluation": EvaluationConfig,
@@ -433,6 +462,29 @@ def load_config(path: Path) -> RuntimeConfig:
         raise ValueError("behavior detector thresholds and mapping must define the same source classes")
     if any(not 0 < float(value) <= 1 for value in detector.class_thresholds.values()):
         raise ValueError("behavior detector class thresholds must be in (0, 1]")
+    seatbelt = config.seatbelt_detector
+    if (
+        seatbelt.image_size <= 0
+        or seatbelt.ncnn_num_threads <= 0
+        or seatbelt.queue_size <= 0
+        or seatbelt.inference_interval_sec <= 0
+    ):
+        raise ValueError("seatbelt detector image size, threads, interval and queue size must be positive")
+    if not 0 < seatbelt.clear_threshold <= seatbelt.no_seatbelt_threshold <= 1:
+        raise ValueError("seatbelt detector thresholds must satisfy 0 < clear <= no_seatbelt <= 1")
+    if (
+        seatbelt.activation_persistence_sec < 0
+        or seatbelt.clear_persistence_sec < 0
+        or seatbelt.evidence_refresh_sec <= 0
+        or seatbelt.evidence_ttl_sec <= seatbelt.evidence_refresh_sec
+    ):
+        raise ValueError("seatbelt detector temporal settings are invalid")
+    if (
+        seatbelt.roi_width_scale < 1.0
+        or seatbelt.roi_height_scale < 1.0
+        or seatbelt.roi_min_size <= 0
+    ):
+        raise ValueError("seatbelt detector torso ROI settings are invalid")
     if min(config.cv_num_threads, config.omp_num_threads, config.ncnn_num_threads) <= 0:
         raise ValueError("runtime thread caps must be positive")
     recorder = config.recorder
@@ -445,7 +497,7 @@ def load_config(path: Path) -> RuntimeConfig:
     if recorder.reserve_free_bytes < 0 or recorder.episode_clear_sec < 0:
         raise ValueError("recorder retention and episode settings cannot be negative")
     known_states = {"FATIGUE_WARNING", "DROWSY", "CRITICAL"}
-    known_violations = {"PHONE_USE", "SMOKING", "EATING"}
+    known_violations = {"PHONE_USE", "SMOKING", "EATING", "SEATBELT_MISSING"}
     if not set(recorder.trigger_states) <= known_states:
         raise ValueError("recorder.trigger_states contains unsupported states")
     if not set(recorder.trigger_violations) <= known_violations:
