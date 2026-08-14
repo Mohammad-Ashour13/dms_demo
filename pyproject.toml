@@ -8,6 +8,17 @@ version = "2.5.0"
 description = "Safee driver monitoring runtime for Raspberry Pi"
 readme = "README_AR.md"
 requires-python = ">=3.11"
+dependencies = [
+    "aiohttp>=3.10,<4",
+    "lightgbm>=4.3,<5",
+    "mediapipe>=0.10.14,<0.11",
+    "numpy>=1.26,<2.1",
+    "opencv-python>=4.10,<5",
+    "pandas>=2.1,<3",
+    "psutil>=5.9,<7",
+    "pytest>=8,<9",
+    "ultralytics>=8.3,<9",
+]
 
 [project.scripts]
 dms-runtime = "dms_final_system.runtime.app:main"

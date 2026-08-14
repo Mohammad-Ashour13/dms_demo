@@ -1,0 +1,3 @@
+# Drowsiness-model bundle integrity is verified with byte-level SHA-256 hashes.
+# Do not let Git's text conversion alter the exported artifacts on checkout.
+models/drowsiness/*/** -text
