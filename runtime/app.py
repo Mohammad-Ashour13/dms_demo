@@ -84,6 +84,32 @@ def _normalize_behavior_detections(
     return result
 
 
+def _eye_signal_blockers(signal, perception_config) -> list[str]:
+    """Explain why the current frame cannot contribute to eye events.
+
+    This is dashboard-only diagnostics.  EventEngine remains the authority for
+    blink/closure decisions and none of its safety thresholds are bypassed.
+    """
+    blockers: list[str] = []
+    if not bool(signal.face_detected):
+        return ["NO_FACE"]
+    if not bool(signal.eye_resolution_valid):
+        blockers.append("EYES_TOO_SMALL")
+    if float(signal.eye_signal_quality) < float(perception_config.min_eye_signal_quality):
+        blockers.append("LOW_EYE_QUALITY")
+    max_pose = max(abs(float(signal.pitch)), abs(float(signal.yaw)), abs(float(signal.roll)))
+    if max_pose > float(perception_config.max_eye_pose_deg):
+        blockers.append("HEAD_POSE_OUT_OF_RANGE")
+    if not (
+        float(signal.event_left_ear) > 0.0
+        and float(signal.event_right_ear) > 0.0
+    ):
+        blockers.append("INVALID_EYE_GEOMETRY")
+    if not blockers and not bool(signal.eye_signal_valid):
+        blockers.append("EYE_SIGNAL_REJECTED")
+    return blockers
+
+
 def _apply_thread_caps(config: RuntimeConfig) -> None:
     omp_threads = str(int(config.omp_num_threads))
     os.environ["OMP_NUM_THREADS"] = omp_threads
@@ -722,6 +748,22 @@ def run(config_path: Path, replay_path: Path | None = None) -> None:
                         ),
                         "eye_signal_valid": bool(signal.eye_signal_valid),
                         "eye_signal_quality": signal.eye_signal_quality,
+                        "eye_signal_quality_threshold": (
+                            config.perception.min_eye_signal_quality
+                        ),
+                        "eye_signal_blockers": _eye_signal_blockers(
+                            signal, config.perception
+                        ),
+                        "perception_process_width": config.perception.process_width,
+                        "eye_resolution_valid": bool(signal.eye_resolution_valid),
+                        "interocular_distance_px": signal.interocular_distance_px,
+                        "minimum_eye_width_px": min(
+                            signal.left_eye_width_px, signal.right_eye_width_px
+                        ),
+                        "pitch": signal.pitch,
+                        "yaw": signal.yaw,
+                        "roll": signal.roll,
+                        "max_eye_pose_deg": config.perception.max_eye_pose_deg,
                         "event_relative_ear": signal.event_relative_ear,
                         "event_left_relative_ear": signal.event_left_relative_ear,
                         "event_right_relative_ear": signal.event_right_relative_ear,

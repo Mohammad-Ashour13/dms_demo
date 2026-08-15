@@ -13,7 +13,7 @@
   },
   "perception": {
     "face_landmarker_path": "models/mediapipe/face_landmarker.task",
-    "process_width": 256,
+    "process_width": 320,
     "min_detection_confidence": 0.5,
     "min_tracking_confidence": 0.5,
     "min_face_quality": 0.55,

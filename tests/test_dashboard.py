@@ -68,6 +68,7 @@ def test_dashboard_read_only_health_status_and_incident_apis(tmp_path):
             assert "class_thresholds" in script_text
             assert "'RAW'" in script_text
             assert "event_relative_ear" in script_text
+            assert "eye_signal_blockers" in script_text
             incidents = await client.get("/api/v1/incidents?limit=invalid")
             payload = await incidents.json()
             assert payload["schema_version"] == "incident-list-v1"

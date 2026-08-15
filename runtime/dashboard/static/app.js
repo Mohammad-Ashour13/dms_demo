@@ -170,9 +170,15 @@ function updateStatus(snapshot) {
   setText('blink-rate', String(Number(driver.blink_count_60s || 0).toFixed(0)));
   const eyeEar = Number(driver.event_relative_ear);
   const calibration = driver.calibration || {};
+  const eyeBlockers = driver.eye_signal_blockers || [];
+  const eyeQuality = Number(driver.eye_signal_quality);
+  const eyeQualityThreshold = Number(driver.eye_signal_quality_threshold);
+  const eyeValidity = eyeBlockers.length
+    ? `${eyeBlockers.join('/')} · Q ${Number.isFinite(eyeQuality) ? eyeQuality.toFixed(2) : '—'}/${Number.isFinite(eyeQualityThreshold) ? eyeQualityThreshold.toFixed(2) : '—'}`
+    : (driver.eye_observation_status || 'UNKNOWN');
   const eyeSummary = calibration.status !== 'READY'
     ? `Calibration ${calibration.status || 'pending'}`
-    : `${driver.eye_state || 'UNKNOWN'} · EAR ${Number.isFinite(eyeEar) ? eyeEar.toFixed(2) : '—'} · ${driver.eye_observation_status || 'UNKNOWN'}`;
+    : `${driver.eye_state || 'UNKNOWN'} · EAR ${Number.isFinite(eyeEar) ? eyeEar.toFixed(2) : '—'} · ${eyeValidity}`;
   setText('blink-detail', eyeSummary);
   setText('camera-resolution', camera.width ? `${camera.width} × ${camera.height}` : '—');
   setText('camera-fps', `${Number(perf.capture_fps || 0).toFixed(1)} FPS`);

@@ -6,7 +6,7 @@ This file is the implementation checklist, benchmark ledger, power-policy decisi
 
 ```text
 Picamera2 (640x480 BGR, fixed 15 FPS, monotonic timestamps)
-  |-- bounded latest-only AI queue --> MediaPipe 256px --> events --> LightGBM --> Fusion --> alarm
+  |-- bounded latest-only AI queue --> MediaPipe 320px --> events --> LightGBM --> Fusion --> alarm
   |                                      |
   |                                      +--> bounded YOLO queue (0.50-0.75s, NCNN)
   |
@@ -24,7 +24,9 @@ The face/upper-body crop improves object scale; it does not claim to reduce fixe
 - [x] Picamera2/libcamera CSI adapter with headless configuration, actual-configuration reporting, monotonic timestamps, and latest-only queues.
 - [x] Mixed-Python compatibility: `picamera2_auto` falls back to a bounded raw-frame worker under the Raspberry Pi OS Python when the AI environment and system libcamera ABIs differ (for example Trixie Python 3.13 with an AI Python 3.12 environment). No on-device libcamera compilation is required.
 - [x] OpenCV retained only for laptop/live compatibility and replay.
-- [x] MediaPipe processing width remains 256.
+- [x] MediaPipe uses a 320px Pi profile. Live CSI verification found that 256px
+  produced unstable eye/head-pose quality and suppressed blink samples; 320px is
+  the selected accuracy/performance compromise pending the Pi soak benchmark.
 - [x] YOLO interval defaults to 0.50 seconds, is capped at 0.75 seconds, and configuration rejects an interval that cannot provide three samples in 1.5 seconds.
 - [x] Periodic full driver-context reacquisition while using the face ROI.
 - [x] Runtime is ready for NCNN thread counts of one, two, or three; the winning value must be selected from whole-pipeline Pi results.

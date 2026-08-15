@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from dms_final_system.runtime.app import (
+    _eye_signal_blockers,
     _normalize_behavior_detections,
     _normalize_face_bbox,
 )
@@ -33,13 +34,50 @@ def test_pi5_profile_has_fixed_camera_recording_dashboard_and_power_contracts():
     assert (config.camera.width, config.camera.height, config.camera.fps) == (640, 480, 15.0)
     # Picamera2 RGB888 is BGR-compatible in memory, as expected by OpenCV.
     assert config.camera.pixel_format == "RGB888"
-    assert config.perception.process_width == 256
+    # 320 is the Pi compromise selected after 256px live CSI frames made
+    # eyelid/head-pose landmarks too unstable to count blinks reliably.
+    assert config.perception.process_width == 320
     assert config.behavior_detector.inference_interval_sec == 0.5
     assert config.behavior_detector.max_inference_interval_sec == 0.75
     assert config.recorder.pre_alert_sec == config.recorder.post_alert_sec == 5.0
     assert config.recorder.require_copy_mux is True
     assert config.recorder.reserve_free_bytes == 2 * 1024**3
     assert config.dashboard.enabled and config.dashboard.port == 8080
+
+
+def test_eye_signal_blockers_explain_dashboard_quality_and_pose_rejection():
+    config = SimpleNamespace(min_eye_signal_quality=0.45, max_eye_pose_deg=25.0)
+    signal = SimpleNamespace(
+        face_detected=True,
+        eye_resolution_valid=True,
+        eye_signal_quality=0.35,
+        pitch=3.0,
+        yaw=28.0,
+        roll=1.0,
+        event_left_ear=0.25,
+        event_right_ear=0.24,
+        eye_signal_valid=False,
+    )
+    assert _eye_signal_blockers(signal, config) == [
+        "LOW_EYE_QUALITY",
+        "HEAD_POSE_OUT_OF_RANGE",
+    ]
+
+
+def test_eye_signal_blockers_are_empty_for_valid_eye_frame():
+    config = SimpleNamespace(min_eye_signal_quality=0.45, max_eye_pose_deg=25.0)
+    signal = SimpleNamespace(
+        face_detected=True,
+        eye_resolution_valid=True,
+        eye_signal_quality=0.80,
+        pitch=3.0,
+        yaw=2.0,
+        roll=1.0,
+        event_left_ear=0.25,
+        event_right_ear=0.24,
+        eye_signal_valid=True,
+    )
+    assert _eye_signal_blockers(signal, config) == []
 
 
 def test_face_bbox_is_normalized_for_browser_overlay_and_hidden_without_face():
