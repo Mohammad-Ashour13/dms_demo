@@ -51,6 +51,39 @@ def _normalize_face_bbox(
     return normalized if normalized[2] > normalized[0] and normalized[3] > normalized[1] else None
 
 
+def _normalize_behavior_detections(
+    detections,
+    frame_width: int,
+    frame_height: int,
+    *,
+    limit: int = 20,
+) -> list[dict]:
+    """Create a bounded, resolution-free snapshot for browser-side overlays."""
+    result = []
+    ordered = sorted(
+        detections,
+        key=lambda detection: float(detection.confidence),
+        reverse=True,
+    )
+    for detection in ordered[: max(0, int(limit))]:
+        bbox = _normalize_face_bbox(
+            True,
+            detection.xyxy,
+            frame_width,
+            frame_height,
+        )
+        if bbox is None:
+            continue
+        result.append(
+            {
+                "label": str(detection.label),
+                "confidence": float(detection.confidence),
+                "bbox_normalized": bbox,
+            }
+        )
+    return result
+
+
 def _apply_thread_caps(config: RuntimeConfig) -> None:
     omp_threads = str(int(config.omp_num_threads))
     os.environ["OMP_NUM_THREADS"] = omp_threads
@@ -648,6 +681,11 @@ def run(config_path: Path, replay_path: Path | None = None) -> None:
                     frame_width,
                     frame_height,
                 )
+                behavior_detections = _normalize_behavior_detections(
+                    behavior_snapshot.detections,
+                    frame_width,
+                    frame_height,
+                )
                 status = status_store.update(
                     runtime={
                         "status": "RUNNING",
@@ -670,6 +708,18 @@ def run(config_path: Path, replay_path: Path | None = None) -> None:
                         "face_bbox_normalized": face_bbox_normalized,
                         "face_bbox_frame_id": perception.latest_face_bbox_frame_id,
                         "driver_distance_status": signal.driver_distance_status,
+                        "blink_count_60s": (
+                            last_event_snapshot.blink_count_60s
+                            if last_event_snapshot else 0
+                        ),
+                    },
+                    behavior={
+                        "frame_id": behavior_snapshot.frame_id,
+                        "active_behaviors": list(behavior_snapshot.active_behaviors),
+                        "class_ratios": dict(behavior_snapshot.class_ratios),
+                        "detections": behavior_detections,
+                        "health": behavior_snapshot.health,
+                        "last_error": behavior_snapshot.last_error,
                     },
                     camera={
                         "backend": camera_configuration.get("backend", source_kind),

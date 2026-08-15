@@ -73,9 +73,61 @@ function updateFaceOverlay(driver) {
   box.style.height = `${(bbox[3] - bbox[1]) * 100}%`;
 }
 
+const behaviorDefinitions = [
+  {source: 'phone', violation: 'PHONE_USE', chip: 'behavior-phone', state: 'behavior-phone-state', title: 'PHONE'},
+  {source: 'cigarette', violation: 'SMOKING', chip: 'behavior-smoking', state: 'behavior-smoking-state', title: 'SMOKING'},
+  {source: 'drink_or_food', violation: 'EATING', chip: 'behavior-eating', state: 'behavior-eating-state', title: 'EATING'},
+];
+
+function updateBehaviorDetection(behavior, driver) {
+  const detections = Array.isArray(behavior.detections) ? behavior.detections : [];
+  const confirmed = new Set([
+    ...(behavior.active_behaviors || []),
+    ...(driver.violations || []),
+  ]);
+
+  behaviorDefinitions.forEach(definition => {
+    const detection = detections
+      .filter(item => item.label === definition.source && Number.isFinite(item.confidence))
+      .sort((left, right) => right.confidence - left.confidence)[0];
+    const isConfirmed = confirmed.has(definition.violation);
+    const chip = $(definition.chip);
+    chip.className = `behavior-chip ${isConfirmed ? 'confirmed' : (detection ? 'detected' : '')}`;
+    setText(
+      definition.state,
+      isConfirmed
+        ? 'CONFIRMED'
+        : (detection ? `DETECTED ${Math.round(detection.confidence * 100)}%` : 'CLEAR'),
+    );
+  });
+
+  const overlays = $('behavior-overlays');
+  overlays.replaceChildren();
+  detections.forEach(detection => {
+    const definition = behaviorDefinitions.find(item => item.source === detection.label);
+    const bbox = detection.bbox_normalized;
+    const valid = definition && Array.isArray(bbox) && bbox.length === 4
+      && bbox.every(Number.isFinite) && bbox[2] > bbox[0] && bbox[3] > bbox[1]
+      && Number.isFinite(detection.confidence);
+    if (!valid) return;
+
+    const box = document.createElement('div');
+    box.className = `behavior-box behavior-box-${detection.label}`;
+    box.style.left = `${bbox[0] * 100}%`;
+    box.style.top = `${bbox[1] * 100}%`;
+    box.style.width = `${(bbox[2] - bbox[0]) * 100}%`;
+    box.style.height = `${(bbox[3] - bbox[1]) * 100}%`;
+    const label = document.createElement('span');
+    label.textContent = `${definition.title} ${Math.round(detection.confidence * 100)}%`;
+    box.appendChild(label);
+    overlays.appendChild(box);
+  });
+}
+
 function updateStatus(snapshot) {
   const runtime = snapshot.runtime || {};
   const driver = snapshot.driver || {};
+  const behavior = snapshot.behavior || {};
   const camera = snapshot.camera || {};
   const perf = snapshot.performance || {};
   const system = snapshot.system || {};
@@ -109,6 +161,8 @@ function updateStatus(snapshot) {
     : '0';
 
   updateFaceOverlay(driver);
+  updateBehaviorDetection(behavior, driver);
+  setText('blink-rate', String(Number(driver.blink_count_60s || 0).toFixed(0)));
   setText('camera-resolution', camera.width ? `${camera.width} × ${camera.height}` : '—');
   setText('camera-fps', `${Number(perf.capture_fps || 0).toFixed(1)} FPS`);
   setText('capture-drop', `${camera.dropped_frames || 0} dropped`);
@@ -188,14 +242,13 @@ async function incidents() {
     const body = $('incident-table');
     const rows = data.incidents || [];
     body.innerHTML = rows.length ? rows.map(incident => {
-      const triggers = [...(incident.trigger_kinds || []), ...(incident.violations || [])]
-        .filter((item, index, array) => array.indexOf(item) === index)
-        .join(', ') || '—';
+      const triggers = (incident.trigger_kinds || []).join(', ') || '—';
+      const evidence = (incident.violations || []).join(', ') || '—';
       const duration = incident.duration_sec === null || incident.duration_sec === undefined
         ? '—'
         : esc(Number(incident.duration_sec).toFixed(1) + ' s');
-      return `<tr><td>${esc(value(incident.started_utc, '—'))}</td><td>${esc(value(incident.highest_state, '—'))}</td><td>${esc(triggers)}</td><td>${duration}</td><td>${esc(bytes(incident.video_size_bytes))}</td></tr>`;
-    }).join('') : '<tr><td colspan="5">No incidents saved</td></tr>';
+      return `<tr><td>${esc(value(incident.started_utc, '—'))}</td><td>${esc(value(incident.highest_state, '—'))}</td><td>${esc(triggers)}</td><td>${esc(evidence)}</td><td>${duration}</td><td>${esc(bytes(incident.video_size_bytes))}</td></tr>`;
+    }).join('') : '<tr><td colspan="6">No incidents saved</td></tr>';
   } catch (error) {
     // Keep the last good incident list while the runtime is busy or restarting.
   }

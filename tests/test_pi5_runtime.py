@@ -6,7 +6,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from dms_final_system.runtime.app import _normalize_face_bbox
+from dms_final_system.runtime.app import (
+    _normalize_behavior_detections,
+    _normalize_face_bbox,
+)
 from dms_final_system.runtime.config import PowerConfig, load_config
 from dms_final_system.runtime.monitoring import (
     RuntimeStatusStore,
@@ -48,6 +51,20 @@ def test_face_bbox_is_normalized_for_browser_overlay_and_hidden_without_face():
     ]
     assert _normalize_face_bbox(False, (64.0, 48.0, 320.0, 240.0), 640, 480) is None
     assert _normalize_face_bbox(True, (20.0, 20.0, 10.0, 10.0), 640, 480) is None
+
+
+def test_behavior_detections_are_bounded_and_normalized_for_dashboard_overlay():
+    detections = [
+        SimpleNamespace(label="phone", confidence=0.7, xyxy=(64, 48, 320, 240)),
+        SimpleNamespace(label="drink_or_food", confidence=0.9, xyxy=(0, 0, 640, 480)),
+    ]
+    assert _normalize_behavior_detections(detections, 640, 480, limit=1) == [
+        {
+            "label": "drink_or_food",
+            "confidence": 0.9,
+            "bbox_normalized": [0.0, 0.0, 1.0, 1.0],
+        }
+    ]
 
 
 def test_invalid_yolo_temporal_sampling_contract_is_rejected(tmp_path):
