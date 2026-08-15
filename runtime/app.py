@@ -520,7 +520,11 @@ def run(config_path: Path, replay_path: Path | None = None) -> None:
                 last_seatbelt_frame_id = seatbelt_snapshot.frame_id
                 seatbelt_inferences += 1
                 stage_timings.record("seatbelt", seatbelt_snapshot.inference_ms)
-            incident_policy_result = incident_policy.evaluate(packet.monotonic_sec, decision)
+            incident_policy_result = incident_policy.evaluate(
+                packet.monotonic_sec,
+                decision,
+                recording_active=bool(recorder and recorder.active is not None),
+            )
             if recorder and incident_policy_result.qualifies:
                 probability = decision.smoothed_probability or 0.0
                 incident_reasons = list(
@@ -862,10 +866,20 @@ def run(config_path: Path, replay_path: Path | None = None) -> None:
                     recording={
                         "enabled": recorder is not None,
                         "active_incident": recorder.active.incident_id if recorder and recorder.active else None,
+                        "trigger_qualifies": incident_policy_result.qualifies,
+                        "trigger_onset": incident_policy_result.onset,
+                        "trigger_kinds": list(incident_policy_result.trigger_kinds),
+                        "policy_episode_active": incident_policy.episode_active,
+                        "policy_highest_priority": incident_policy.highest_priority,
                         "incident_count": recorder.incident_count if recorder else 0,
                         "finalized_incidents": recorder.finalized_incidents if recorder else 0,
                         "deleted_incidents": recorder.deleted_incidents if recorder else 0,
                         "dropped_frames": recorder.dropped_frames if recorder else 0,
+                        "finalize_queue_depth": recorder.finalize_queue.qsize() if recorder else 0,
+                        "finalize_dropped": recorder.finalize_dropped if recorder else 0,
+                        "last_started_incident_id": recorder.last_started_incident_id if recorder else None,
+                        "last_finalized_incident_id": recorder.last_finalized_incident_id if recorder else None,
+                        "last_error": recorder.last_error if recorder else "",
                         "hub_dropped_frames": frame_hub.dropped_frames if frame_hub else 0,
                         "encoder": "ffmpeg_mjpeg_copy" if recorder else "disabled",
                     },

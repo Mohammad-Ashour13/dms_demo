@@ -87,6 +87,9 @@ def test_shared_jpeg_copy_mux_creates_fixed_atomic_incident(tmp_path, monkeypatc
     recorder.close()
 
     directory = tmp_path / "outbox" / incident_id
+    assert recorder.last_started_incident_id == incident_id
+    assert recorder.last_finalized_incident_id == incident_id
+    assert recorder.last_error == ""
     payload = json.loads((directory / "incident.json").read_text(encoding="utf-8"))
     video = directory / "video.mp4"
     assert encode_calls == 151

@@ -48,10 +48,13 @@ def test_dashboard_read_only_health_status_and_incident_apis(tmp_path):
             health = await client.get("/healthz")
             assert health.status == 200
             assert health.headers["X-Frame-Options"] == "DENY"
+            assert health.headers["Cache-Control"].startswith("no-store")
             assert (await health.json())["healthy"] is True
             status = await client.get("/api/v1/status")
+            assert status.headers["Cache-Control"].startswith("no-store")
             assert (await status.json())["schema_version"] == "dashboard-status-v1"
             home = await client.get("/")
+            assert home.headers["Cache-Control"].startswith("no-store")
             home_text = await home.text()
             assert 'id="face-box"' in home_text
             assert 'id="face-status"' in home_text
@@ -62,6 +65,7 @@ def test_dashboard_read_only_health_status_and_incident_apis(tmp_path):
             assert 'id="behavior-smoking"' in home_text
             assert 'id="behavior-eating"' in home_text
             script = await client.get("/static/app.js")
+            assert script.headers["Cache-Control"].startswith("no-store")
             script_text = await script.text()
             assert "face_bbox_normalized" in script_text
             assert "bbox_normalized" in script_text

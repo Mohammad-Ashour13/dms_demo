@@ -156,12 +156,60 @@ def test_incident_policy_suppresses_yawn_only_warning_and_rearms_after_clear():
     assert not yawn.qualifies and not yawn.onset
     phone = policy.evaluate(2.0, _decision("NORMAL", ["PHONE_USE"]))
     assert phone.qualifies and phone.onset and phone.trigger_kinds == ("PHONE_USE",)
-    overlap = policy.evaluate(3.0, _decision("DROWSY", ["PHONE_USE"]))
+    overlap = policy.evaluate(
+        3.0,
+        _decision("DROWSY", ["PHONE_USE"]),
+        recording_active=True,
+    )
     assert overlap.qualifies and not overlap.onset
     policy.evaluate(4.0, _decision())
     policy.evaluate(6.1, _decision())
     next_episode = policy.evaluate(7.0, _decision("DROWSY"))
     assert next_episode.onset
+
+
+def test_incident_policy_records_material_escalation_after_prior_clip_ended():
+    policy = IncidentTriggerPolicy(
+        ["FATIGUE_WARNING", "DROWSY", "CRITICAL"],
+        ["PHONE_USE", "SMOKING", "EATING"],
+        episode_clear_sec=2.0,
+    )
+    eating = policy.evaluate(
+        1.0,
+        _decision("NORMAL", ["EATING"]),
+        recording_active=False,
+    )
+    assert eating.onset
+
+    # The same behavior cannot produce another random clip after the first one.
+    repeated = policy.evaluate(
+        12.0,
+        _decision("NORMAL", ["EATING"]),
+        recording_active=False,
+    )
+    assert repeated.qualifies and not repeated.onset
+
+    # A later critical escalation is safety-significant and must not be lost.
+    critical = policy.evaluate(
+        13.0,
+        _decision("CRITICAL", ["EATING"]),
+        recording_active=False,
+    )
+    assert critical.qualifies and critical.onset
+
+
+def test_incident_policy_merges_escalation_when_original_clip_is_still_active():
+    policy = IncidentTriggerPolicy(
+        ["FATIGUE_WARNING", "DROWSY", "CRITICAL"],
+        ["EATING"],
+    )
+    assert policy.evaluate(
+        1.0, _decision("FATIGUE_WARNING"), recording_active=False
+    ).onset
+    escalation = policy.evaluate(
+        3.0, _decision("CRITICAL"), recording_active=True
+    )
+    assert escalation.qualifies and not escalation.onset
 
 
 def test_current_and_historical_throttling_flags_are_distinct():

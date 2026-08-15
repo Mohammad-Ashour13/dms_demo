@@ -113,6 +113,9 @@ class RollingIncidentRecorder:
         self.finalize_dropped = 0
         self.finalized_incidents = 0
         self.deleted_incidents = 0
+        self.last_started_incident_id: str | None = None
+        self.last_finalized_incident_id: str | None = None
+        self.last_error = ""
         self._incident_count = 0
         self.copy_mux_available = self._probe_copy_mux()
         self._recover_partial_directories()
@@ -236,6 +239,8 @@ class RollingIncidentRecorder:
                     float(now) + self.post_alert,
                     list(preframes),
                 )
+                self.last_started_incident_id = incident_id
+                self.last_error = ""
                 self.telemetry.emit(
                     "Recorder",
                     "incident_started",
@@ -275,6 +280,7 @@ class RollingIncidentRecorder:
                     self.finalize_queue.put_nowait(finalize)
                 except queue.Full:
                     self.finalize_dropped += 1
+                    self.last_error = "finalize_queue_full"
                     self.telemetry.emit(
                         "Recorder",
                         "finalize_queue_full",
@@ -402,6 +408,7 @@ class RollingIncidentRecorder:
             try:
                 self._finalize(incident)
             except Exception as exc:
+                self.last_error = repr(exc)
                 self.telemetry.emit(
                     "Recorder",
                     "incident_finalize_failed",
@@ -487,6 +494,8 @@ class RollingIncidentRecorder:
         partial.replace(final_directory)
         _fsync_directory(self.output_dir)
         self.finalized_incidents += 1
+        self.last_finalized_incident_id = incident.incident_id
+        self.last_error = ""
         self._incident_count += 1
         try:
             self.sink.publish(record)

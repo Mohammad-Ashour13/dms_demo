@@ -32,7 +32,10 @@ The face/upper-body crop improves object scale; it does not claim to reduce fixe
 - [x] Runtime is ready for NCNN thread counts of one, two, or three; the winning value must be selected from whole-pipeline Pi results.
 - [x] One shared JPEG encode per camera frame with bounded fan-out to recording and preview.
 - [x] FFmpeg MJPEG-in-MP4 `-c:v copy`; production preflight performs a real copy-mux probe and prohibits a fallback.
-- [x] Fixed five-second pre/onset + five-second post clip, one clip per episode, without indefinite extension.
+- [x] Fixed five-second pre/onset + five-second post clips without indefinite
+  extension. Repeated same-severity triggers stay suppressed; a material
+  DROWSY/CRITICAL escalation may start another fixed clip only after the prior
+  clip has already ended.
 - [x] Trigger policy covers fatigue states and confirmed phone/smoking/eating; a yawn-only warning is suppressed.
 - [x] `.partial` incident assembly, fsync, video SHA256 file, atomic directory rename, and startup recovery/quarantine.
 - [x] Two-GiB reserve with oldest-finalized deletion and deletion telemetry; partial/active incidents are never retention targets.

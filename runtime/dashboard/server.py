@@ -161,7 +161,7 @@ def create_app(config: dict, incident_dir: Path, state: DashboardState, clients)
                 clients.value = max(0, clients.value - 1)
         return response
 
-    async def security_headers(_request, response):
+    async def security_headers(request, response):
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "no-referrer"
@@ -169,6 +169,17 @@ def create_app(config: dict, incident_dir: Path, state: DashboardState, clients)
             "default-src 'self'; img-src 'self' data:; script-src 'self'; "
             "style-src 'self'; connect-src 'self'; object-src 'none'; frame-ancestors 'none'"
         )
+        # This is a live appliance UI. A stale JavaScript bundle can display an
+        # old metric while /api/v1/status already contains the correct value.
+        if (
+            request.path == "/"
+            or request.path.startswith("/static/")
+            or request.path.startswith("/api/")
+            or request.path == "/healthz"
+        ):
+            response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Expires"] = "0"
     app = web.Application(client_max_size=256 * 1024)
     app.on_response_prepare.append(security_headers)
     app.router.add_get("/", index)
