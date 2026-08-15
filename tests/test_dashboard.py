@@ -56,6 +56,7 @@ def test_dashboard_read_only_health_status_and_incident_apis(tmp_path):
             assert 'id="face-box"' in home_text
             assert 'id="face-status"' in home_text
             assert 'id="blink-rate"' in home_text
+            assert 'id="blink-detail"' in home_text
             assert 'id="behavior-overlays"' in home_text
             assert 'id="behavior-phone"' in home_text
             assert 'id="behavior-smoking"' in home_text
@@ -64,6 +65,9 @@ def test_dashboard_read_only_health_status_and_incident_apis(tmp_path):
             script_text = await script.text()
             assert "face_bbox_normalized" in script_text
             assert "bbox_normalized" in script_text
+            assert "class_thresholds" in script_text
+            assert "'RAW'" in script_text
+            assert "event_relative_ear" in script_text
             incidents = await client.get("/api/v1/incidents?limit=invalid")
             payload = await incidents.json()
             assert payload["schema_version"] == "incident-list-v1"

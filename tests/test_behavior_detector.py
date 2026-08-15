@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 
 import numpy as np
+import pytest
 
 from dms_final_system.runtime.config import BehaviorDetectorConfig
 from dms_final_system.runtime.fusion import FusionStateMachine
@@ -152,6 +153,15 @@ class _EmptyBackend(_Backend):
         return []
 
 
+class _LowConfidenceBackend(_Backend):
+    def __init__(self):
+        self.requested_confidence = None
+
+    def predict(self, frame, **kwargs):
+        self.requested_confidence = kwargs.get("confidence")
+        return [_detection("phone", 0.20)]
+
+
 def _detector_config(tmp_path, **overrides):
     model = tmp_path / "dummy.pt"
     model.write_bytes(b"dummy")
@@ -184,6 +194,67 @@ def test_backend_auto_resolver_infers_runtime_from_model_path(tmp_path):
     assert resolve_execution_mode("onnx", "auto") == "thread"
     assert resolve_execution_mode("pytorch", "auto") == "process"
     assert resolve_execution_mode("ncnn", "process") == "process"
+
+
+def test_low_confidence_raw_detection_is_observable_but_not_safety_evidence(tmp_path):
+    backend = _LowConfidenceBackend()
+    detector = YoloBehaviorDetector(
+        _detector_config(
+            tmp_path,
+            raw_confidence_threshold=0.10,
+            adaptive_interval=False,
+            roi_mode="full",
+        ),
+        EvidenceBus(),
+        _Telemetry(),
+        backend=backend,
+    )
+    try:
+        detector.submit(
+            FramePacket(1, "utc", 1.0, np.zeros((48, 64, 3), dtype=np.uint8))
+        )
+        deadline = time.monotonic() + 1.0
+        while detector.snapshot().frame_id != 1 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        snapshot = detector.snapshot()
+        assert backend.requested_confidence == pytest.approx(0.10)
+        assert snapshot.detections[0].label == "phone"
+        assert snapshot.detections[0].confidence == pytest.approx(0.20)
+        assert snapshot.active_behaviors == []
+        assert detector.evidence_bus.drain() == []
+    finally:
+        detector.close()
+
+
+def test_safe_mode_temporal_window_absorbs_sampling_jitter(tmp_path):
+    detector = YoloBehaviorDetector(
+        _detector_config(
+            tmp_path,
+            inference_interval_sec=0.5,
+            max_inference_interval_sec=0.75,
+            temporal_window_sec=1.5,
+            temporal_sampling_slack_sec=0.15,
+        ),
+        EvidenceBus(),
+        _Telemetry(),
+        backend=_Backend(),
+    )
+    try:
+        detector.set_safe_mode(True, 0.75)
+        assert detector.effective_interval_sec == pytest.approx(0.75)
+        assert detector.effective_temporal_window_sec == pytest.approx(1.65)
+        active = []
+        for frame_id, timestamp in enumerate((0.0, 0.8, 1.6), start=1):
+            active, _, _ = detector.filter.update(
+                timestamp,
+                [_detection("phone", 0.9)],
+                frame_id=frame_id,
+            )
+        assert active == ["PHONE_USE"]
+        detector.set_safe_mode(False)
+        assert detector.effective_temporal_window_sec == pytest.approx(1.5)
+    finally:
+        detector.close()
 
 
 def test_static_roi_crop_preserves_full_frame_offsets():

@@ -86,6 +86,27 @@ def test_invalid_yolo_temporal_sampling_contract_is_rejected(tmp_path):
         load_config(path)
 
 
+def test_raw_behavior_threshold_cannot_bypass_activation_thresholds(tmp_path):
+    path = tmp_path / "bad-raw-threshold.json"
+    path.write_text(
+        json.dumps(
+            {
+                "behavior_detector": {
+                    "raw_confidence_threshold": 0.5,
+                    "class_thresholds": {
+                        "phone": 0.4,
+                        "cigarette": 0.3,
+                        "drink_or_food": 0.35,
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="raw_confidence_threshold"):
+        load_config(path)
+
+
 def test_incident_policy_suppresses_yawn_only_warning_and_rearms_after_clear():
     policy = IncidentTriggerPolicy(
         ["FATIGUE_WARNING", "DROWSY", "CRITICAL"],

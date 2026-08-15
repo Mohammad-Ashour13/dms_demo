@@ -797,6 +797,8 @@ class YoloBehaviorDetector:
         self.execution_mode = "disabled"
         self.base_interval_sec = float(config.inference_interval_sec)
         self.effective_interval_sec = self.base_interval_sec
+        self.base_temporal_window_sec = float(config.temporal_window_sec)
+        self.effective_temporal_window_sec = self.base_temporal_window_sec
         self.safe_mode_enabled = False
         self.safe_mode_interval_sec = self.base_interval_sec
         self.last_context_roi = float("-inf")
@@ -880,6 +882,7 @@ class YoloBehaviorDetector:
                 evidence_ttl_sec=config.evidence_ttl_sec,
                 model_version=self.model_version,
             )
+            self._sync_temporal_window()
             self.snapshot_value = BehaviorDetectorSnapshot(
                 0.0, -1, self.model_version, self.backend_name, [], [], {}, 0.0,
                 health="READY",
@@ -946,6 +949,7 @@ class YoloBehaviorDetector:
         self.effective_interval_sec = (
             self.safe_mode_interval_sec if enabled else self.base_interval_sec
         )
+        self._sync_temporal_window()
         if enabled != previous:
             self.telemetry.emit(
                 "BehaviorDetector",
@@ -953,8 +957,23 @@ class YoloBehaviorDetector:
                 {
                     "enabled": enabled,
                     "effective_interval_sec": self.effective_interval_sec,
+                    "effective_temporal_window_sec": self.effective_temporal_window_sec,
                 },
             )
+
+    def _sync_temporal_window(self) -> None:
+        """Keep temporal activation reachable despite frame/scheduling jitter."""
+        sample_span = self.effective_interval_sec * max(
+            0, int(self.config.minimum_samples) - 1
+        )
+        required = sample_span + float(self.config.temporal_sampling_slack_sec)
+        self.effective_temporal_window_sec = max(
+            self.base_temporal_window_sec,
+            required,
+        )
+        behavior_filter = getattr(self, "filter", None)
+        if behavior_filter is not None:
+            behavior_filter.window_sec = self.effective_temporal_window_sec
 
     def _static_crop(self, frame: np.ndarray):
         height, width = frame.shape[:2]
@@ -1073,12 +1092,14 @@ class YoloBehaviorDetector:
         if abs(new - old) < 1e-4:
             return
         self.effective_interval_sec = float(new)
+        self._sync_temporal_window()
         self.telemetry.emit(
             "BehaviorDetector",
             "interval_changed",
             {
                 "previous_interval_sec": old,
                 "effective_interval_sec": self.effective_interval_sec,
+                "effective_temporal_window_sec": self.effective_temporal_window_sec,
                 "base_interval_sec": base,
                 "max_interval_sec": maximum,
                 "latency_budget_ms": budget,
@@ -1090,7 +1111,9 @@ class YoloBehaviorDetector:
 
     def _run(self) -> None:
         assert self.backend is not None
-        minimum_confidence = min(float(value) for value in self.config.class_thresholds.values())
+        # Keep a low-confidence diagnostic band observable. TemporalBehaviorFilter
+        # still applies class_thresholds before publishing any safety evidence.
+        raw_confidence = float(self.config.raw_confidence_threshold)
         while not self.stop_event.is_set():
             try:
                 item = self.queue.get(timeout=0.1)
@@ -1126,7 +1149,7 @@ class YoloBehaviorDetector:
                 raw = self.backend.predict(
                     crop,
                     image_size=self.config.image_size,
-                    confidence=minimum_confidence,
+                    confidence=raw_confidence,
                     iou=self.config.iou_threshold,
                 )
                 detections = [
@@ -1143,7 +1166,6 @@ class YoloBehaviorDetector:
                     )
                     for detection in raw
                     if detection.label in self.config.class_mapping
-                    and detection.confidence >= self.config.class_thresholds[detection.label]
                 ]
                 if (
                     crop_info.get("mode")

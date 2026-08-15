@@ -125,6 +125,9 @@ class BehaviorDetectorConfig:
     ncnn_num_threads: int = 3
     image_size: int = 640
     iou_threshold: float = 0.45
+    # Observable raw boxes may use a lower confidence than safety evidence.
+    # class_thresholds remain the only activation/recording thresholds.
+    raw_confidence_threshold: float = 0.10
     inference_interval_sec: float = 0.50
     adaptive_interval: bool = True
     latency_budget_ms: float = 250.0
@@ -137,6 +140,9 @@ class BehaviorDetectorConfig:
     roi_fallback_static_on_no_face: bool = True
     context_roi_interval_sec: float = 2.0
     temporal_window_sec: float = 1.5
+    # Scheduling/frame jitter allowance used only when a slower adaptive/safe
+    # interval would otherwise make minimum_samples mathematically unreachable.
+    temporal_sampling_slack_sec: float = 0.15
     minimum_samples: int = 3
     activation_ratio: float = 0.60
     activation_persistence_sec: float = 0.50
@@ -445,7 +451,11 @@ def load_config(path: Path) -> RuntimeConfig:
         or detector.context_roi_interval_sec <= 0
     ):
         raise ValueError("behavior_detector ROI scale and min size are invalid")
-    if detector.minimum_samples <= 0 or detector.temporal_window_sec <= 0:
+    if (
+        detector.minimum_samples <= 0
+        or detector.temporal_window_sec <= 0
+        or detector.temporal_sampling_slack_sec < 0
+    ):
         raise ValueError("behavior detector temporal settings must be positive")
     if not 0 < detector.activation_ratio <= 1:
         raise ValueError("behavior_detector.activation_ratio must be in (0, 1]")
@@ -462,6 +472,11 @@ def load_config(path: Path) -> RuntimeConfig:
         raise ValueError("behavior detector thresholds and mapping must define the same source classes")
     if any(not 0 < float(value) <= 1 for value in detector.class_thresholds.values()):
         raise ValueError("behavior detector class thresholds must be in (0, 1]")
+    if not 0 < detector.raw_confidence_threshold <= min(detector.class_thresholds.values()):
+        raise ValueError(
+            "behavior_detector.raw_confidence_threshold must be positive and no greater "
+            "than the smallest class threshold"
+        )
     seatbelt = config.seatbelt_detector
     if (
         seatbelt.image_size <= 0

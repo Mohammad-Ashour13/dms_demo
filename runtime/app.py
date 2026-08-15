@@ -712,6 +712,20 @@ def run(config_path: Path, replay_path: Path | None = None) -> None:
                             last_event_snapshot.blink_count_60s
                             if last_event_snapshot else 0
                         ),
+                        "eye_state": (
+                            last_event_snapshot.eye_state
+                            if last_event_snapshot else "CALIBRATING"
+                        ),
+                        "eye_observation_status": (
+                            last_event_snapshot.eye_observation_status
+                            if last_event_snapshot else "CALIBRATING"
+                        ),
+                        "eye_signal_valid": bool(signal.eye_signal_valid),
+                        "eye_signal_quality": signal.eye_signal_quality,
+                        "event_relative_ear": signal.event_relative_ear,
+                        "event_left_relative_ear": signal.event_left_relative_ear,
+                        "event_right_relative_ear": signal.event_right_relative_ear,
+                        "calibration": calibration.to_dict(),
                     },
                     behavior={
                         "frame_id": behavior_snapshot.frame_id,
@@ -720,6 +734,15 @@ def run(config_path: Path, replay_path: Path | None = None) -> None:
                         "detections": behavior_detections,
                         "health": behavior_snapshot.health,
                         "last_error": behavior_snapshot.last_error,
+                        "raw_confidence_threshold": (
+                            config.behavior_detector.raw_confidence_threshold
+                        ),
+                        "effective_temporal_window_sec": (
+                            behavior_detector.effective_temporal_window_sec
+                        ),
+                        "class_thresholds": dict(
+                            config.behavior_detector.class_thresholds
+                        ),
                     },
                     camera={
                         "backend": camera_configuration.get("backend", source_kind),

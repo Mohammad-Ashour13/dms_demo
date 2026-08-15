@@ -81,6 +81,7 @@ const behaviorDefinitions = [
 
 function updateBehaviorDetection(behavior, driver) {
   const detections = Array.isArray(behavior.detections) ? behavior.detections : [];
+  const thresholds = behavior.class_thresholds || {};
   const confirmed = new Set([
     ...(behavior.active_behaviors || []),
     ...(driver.violations || []),
@@ -91,13 +92,17 @@ function updateBehaviorDetection(behavior, driver) {
       .filter(item => item.label === definition.source && Number.isFinite(item.confidence))
       .sort((left, right) => right.confidence - left.confidence)[0];
     const isConfirmed = confirmed.has(definition.violation);
+    const aboveThreshold = detection
+      && detection.confidence >= Number(thresholds[definition.source] || 1);
     const chip = $(definition.chip);
-    chip.className = `behavior-chip ${isConfirmed ? 'confirmed' : (detection ? 'detected' : '')}`;
+    chip.className = `behavior-chip ${isConfirmed ? 'confirmed' : (aboveThreshold ? 'detected' : (detection ? 'raw' : ''))}`;
     setText(
       definition.state,
       isConfirmed
         ? 'CONFIRMED'
-        : (detection ? `DETECTED ${Math.round(detection.confidence * 100)}%` : 'CLEAR'),
+        : (detection
+          ? `${aboveThreshold ? 'DETECTED' : 'RAW'} ${Math.round(detection.confidence * 100)}%`
+          : 'CLEAR'),
     );
   });
 
@@ -163,6 +168,12 @@ function updateStatus(snapshot) {
   updateFaceOverlay(driver);
   updateBehaviorDetection(behavior, driver);
   setText('blink-rate', String(Number(driver.blink_count_60s || 0).toFixed(0)));
+  const eyeEar = Number(driver.event_relative_ear);
+  const calibration = driver.calibration || {};
+  const eyeSummary = calibration.status !== 'READY'
+    ? `Calibration ${calibration.status || 'pending'}`
+    : `${driver.eye_state || 'UNKNOWN'} · EAR ${Number.isFinite(eyeEar) ? eyeEar.toFixed(2) : '—'} · ${driver.eye_observation_status || 'UNKNOWN'}`;
+  setText('blink-detail', eyeSummary);
   setText('camera-resolution', camera.width ? `${camera.width} × ${camera.height}` : '—');
   setText('camera-fps', `${Number(perf.capture_fps || 0).toFixed(1)} FPS`);
   setText('capture-drop', `${camera.dropped_frames || 0} dropped`);
