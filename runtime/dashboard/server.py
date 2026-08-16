@@ -6,6 +6,7 @@ import queue
 import threading
 import time
 from pathlib import Path
+from urllib.parse import quote
 
 
 class DashboardState:
@@ -66,9 +67,10 @@ def _read_incidents(incident_dir: Path, limit=50) -> list[dict]:
         try:
             payload = json.loads(metadata.read_text(encoding="utf-8"))
             video = path / "video.mp4"
+            incident_id = str(payload.get("incident_id", path.name))
             records.append(
                 {
-                    "incident_id": payload.get("incident_id", path.name),
+                    "incident_id": incident_id,
                     "started_utc": payload.get("started_utc"),
                     "ended_utc": payload.get("ended_utc"),
                     "highest_state": payload.get("highest_state"),
@@ -78,6 +80,10 @@ def _read_incidents(incident_dir: Path, limit=50) -> list[dict]:
                     "frame_count": payload.get("frame_count"),
                     "encoder_backend": payload.get("encoder_backend"),
                     "video_size_bytes": video.stat().st_size if video.is_file() else None,
+                    "video_url": (
+                        f"/api/v1/incidents/{quote(incident_id, safe='')}/video"
+                        if video.is_file() else None
+                    ),
                 }
             )
         except (OSError, ValueError):
@@ -121,6 +127,19 @@ def create_app(config: dict, incident_dir: Path, state: DashboardState, clients)
                 "schema_version": "incident-list-v1",
                 "incidents": _read_incidents(incident_dir, limit),
             }
+        )
+
+    async def incident_video(request):
+        incident_id = request.match_info["incident_id"]
+        if not incident_id or Path(incident_id).name != incident_id:
+            raise web.HTTPNotFound()
+        root = incident_dir.resolve()
+        video = (root / incident_id / "video.mp4").resolve()
+        if video.parent != root / incident_id or not video.is_file():
+            raise web.HTTPNotFound()
+        return web.FileResponse(
+            video,
+            headers={"Content-Disposition": f'inline; filename="{incident_id}.mp4"'},
         )
 
     async def stream(request):
@@ -186,6 +205,7 @@ def create_app(config: dict, incident_dir: Path, state: DashboardState, clients)
     app.router.add_get("/healthz", healthz)
     app.router.add_get("/api/v1/status", api_status)
     app.router.add_get("/api/v1/incidents", api_incidents)
+    app.router.add_get("/api/v1/incidents/{incident_id}/video", incident_video)
     app.router.add_get("/stream.mjpg", stream)
     app.router.add_static("/static", static_dir, show_index=False)
     return app

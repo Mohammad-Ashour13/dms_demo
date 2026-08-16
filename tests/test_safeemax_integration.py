@@ -9,8 +9,6 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
 
-import pytest
-
 from dms_final_system.runtime.config import load_config
 from dms_final_system.runtime.integration.safeemax import (
     DeliveryResult,
@@ -322,11 +320,12 @@ def _write_config(path: Path, deployment_mode: str) -> None:
     )
 
 
-def test_api_integration_requires_active_deployment(tmp_path):
+def test_api_integration_is_independent_from_model_deployment_mode(tmp_path):
     path = tmp_path / "runtime.json"
     _write_config(path, "SHADOW")
-    with pytest.raises(ValueError, match="ACTIVE"):
-        load_config(path)
+    shadow_config = load_config(path)
+    assert shadow_config.safeemax_api.enabled
+    assert shadow_config.deployment_mode == "SHADOW"
 
     _write_config(path, "ACTIVE")
     config = load_config(path)

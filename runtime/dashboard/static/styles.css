@@ -36,3 +36,4 @@
 .landing-status[data-state="DISABLED"],.landing-status[data-state="SUPPRESSED"],.landing-status[data-state="REJECTED"]{border-top-color:var(--red)}
 .landing-status[data-state="ONLINE"] strong{color:var(--green)}
 .landing-status[data-state="RETRYING"] strong,.landing-status[data-state="DISABLED"] strong,.landing-status[data-state="SUPPRESSED"] strong,.landing-status[data-state="REJECTED"] strong{color:var(--red)}
+.recording-link{display:inline-block;padding:6px 10px;border-radius:8px;background:var(--green);color:#fff;text-decoration:none;font-size:12px;font-weight:800}.recording-link:hover{background:#177542}

@@ -82,6 +82,12 @@ def test_dashboard_read_only_health_status_and_incident_apis(tmp_path):
             assert payload["schema_version"] == "incident-list-v1"
             assert payload["incidents"][0]["incident_id"] == "incident-1"
             assert payload["incidents"][0]["duration_sec"] == 10.0
+            video_url = payload["incidents"][0]["video_url"]
+            assert video_url == "/api/v1/incidents/incident-1/video"
+            video = await client.get(video_url)
+            assert video.status == 200
+            assert await video.read() == b"video"
+            assert (await client.get("/api/v1/incidents/../video")).status == 404
             assert (await client.post("/api/v1/status")).status == 405
             paths = {resource.canonical for resource in app.router.resources()}
             assert "/stream.mjpg" in paths
