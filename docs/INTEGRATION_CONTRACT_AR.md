@@ -30,3 +30,9 @@ EvidenceEvent(
 - `telemetry.jsonl`
 
 يجب أن يكون الرفع idempotent باستخدام `incident_id`، وألا يحذف الفولدر إلا بعد acknowledgment لكل الملفات. أي retry أو authentication أو API endpoint هو مسؤولية Adapter وليس Recorder أو Fusion.
+
+## إرسال تنبيهات Safeemax
+
+التكامل المنفّذ مع `POST /api/events` موثّق بالتفصيل في
+`docs/SAFEEMAX_API_INTEGRATION_AR.md`. الإرسال غير حاجب لمسار AI، ويستخدم
+outbox محلياً و`eventId` ثابتاً عند إعادة المحاولة.

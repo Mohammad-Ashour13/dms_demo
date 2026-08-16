@@ -23,6 +23,7 @@
 - `docs/COLAB_RUNBOOK_AR.md`
 - `docs/RASPBERRY_RUNBOOK_AR.md`
 - `docs/INTEGRATION_CONTRACT_AR.md`
+- `docs/SAFEEMAX_API_INTEGRATION_AR.md` — إعداد إرسال التنبيهات الموثوق إلى واجهة Safeemax وحدود API حالة الجهاز.
 - `docs/ACCEPTANCE_CHECKLIST_AR.md`
 - `docs/PERSONAL_EVALUATION_RUNBOOK_AR.md`
 - `docs/RUNTIME_V2_REPAIR_RUNBOOK_AR.md`

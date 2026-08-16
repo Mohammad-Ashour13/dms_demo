@@ -144,7 +144,11 @@ def run(config_path: Path, replay_path: Path | None = None) -> None:
     from dms_final_system.runtime.features import V3RuntimeFeatureBuilder
     from dms_final_system.runtime.fusion import FusionStateMachine
     from dms_final_system.runtime.hmi import VisualHMI
-    from dms_final_system.runtime.integration import EvidenceBus
+    from dms_final_system.runtime.integration import (
+        EvidenceBus,
+        SafeemaxEventClient,
+        SafeemaxEventPublisher,
+    )
     from dms_final_system.runtime.model.bundle import (
         assert_deployment_allowed,
         read_active_model,
@@ -381,6 +385,55 @@ def run(config_path: Path, replay_path: Path | None = None) -> None:
         metrics_sampler.close()
         telemetry.close()
         raise
+    safeemax_client = None
+    safeemax_publisher = None
+    if config.safeemax_api.enabled and source_kind == "camera":
+        api_config = config.safeemax_api
+        try:
+            safeemax_client = SafeemaxEventClient(
+                api_config.base_url,
+                _resolve(api_config.outbox_dir),
+                telemetry,
+                request_timeout_sec=api_config.request_timeout_sec,
+                retry_initial_sec=api_config.retry_initial_sec,
+                retry_max_sec=api_config.retry_max_sec,
+                queue_size=api_config.queue_size,
+            )
+            safeemax_publisher = SafeemaxEventPublisher(
+                safeemax_client,
+                device_id=api_config.device_id,
+                vehicle=api_config.vehicle,
+                driver=api_config.driver,
+                location=api_config.location,
+                battery=api_config.battery,
+                event_states=api_config.event_states,
+                event_violations=api_config.event_violations,
+            )
+        except Exception:
+            if safeemax_client:
+                safeemax_client.close()
+            alarm.close()
+            capture.close()
+            perception.close()
+            behavior_detector.close()
+            seatbelt_detector.close()
+            if frame_hub:
+                frame_hub.close()
+            if recorder:
+                recorder.close()
+            if evaluation:
+                evaluation.close()
+            dashboard.close()
+            metrics_sampler.close()
+            telemetry.close()
+            raise
+    elif config.safeemax_api.enabled:
+        telemetry.emit(
+            "SafeemaxAPI",
+            "replay_delivery_suppressed",
+            {"source": source_kind},
+            level="WARNING",
+        )
     hmi = VisualHMI(config.hmi, telemetry, enabled=source_kind == "camera")
     telemetry.emit(
         "Startup", "self_test_passed",
@@ -389,6 +442,7 @@ def run(config_path: Path, replay_path: Path | None = None) -> None:
             "model_status": bundle_status["status"],
             "deployment_mode": config.deployment_mode,
             "evaluation_enabled": config.evaluation.enabled,
+            "safeemax_api_enabled": safeemax_publisher is not None,
         },
     )
 
@@ -562,6 +616,20 @@ def run(config_path: Path, replay_path: Path | None = None) -> None:
                 last_event_snapshot,
                 incident_id=incident_id,
             )
+            if safeemax_publisher is not None:
+                try:
+                    safeemax_publisher.publish_decision(
+                        packet, decision, predictor.model_version
+                    )
+                except Exception as exc:
+                    telemetry.emit(
+                        "SafeemaxAPI",
+                        "event_queue_failed",
+                        {"error": repr(exc)},
+                        monotonic_sec=packet.monotonic_sec,
+                        frame_id=packet.frame_id,
+                        level="ERROR",
+                    )
             hmi.push(
                 packet.frame,
                 decision,
@@ -891,6 +959,11 @@ def run(config_path: Path, replay_path: Path | None = None) -> None:
                         "dropped_preview": dashboard.dropped_preview,
                         "published_preview": dashboard.published_preview,
                     },
+                    remote_api=(
+                        safeemax_client.snapshot()
+                        if safeemax_client is not None
+                        else {"enabled": False}
+                    ),
                 )
                 dashboard.publish_status(status)
 
@@ -919,6 +992,11 @@ def run(config_path: Path, replay_path: Path | None = None) -> None:
                      "stage_latencies": stage_timings.snapshot(),
                      "frame_hub_dropped": frame_hub.dropped_frames if frame_hub else 0,
                      "dashboard_healthy": dashboard.healthy,
+                     "safeemax_api": (
+                         safeemax_client.snapshot()
+                         if safeemax_client is not None
+                         else {"enabled": False}
+                     ),
                      "telemetry_dropped": telemetry.dropped_records},
                     monotonic_sec=packet.monotonic_sec,
                 )
@@ -940,6 +1018,8 @@ def run(config_path: Path, replay_path: Path | None = None) -> None:
             evaluation.close()
         dashboard.close()
         metrics_sampler.close()
+        if safeemax_client:
+            safeemax_client.close()
         telemetry.emit("Runtime", "session_finished", {"processed_frames": processed})
         telemetry.close()
 

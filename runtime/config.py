@@ -301,6 +301,30 @@ class PowerConfig:
 
 
 @dataclass(slots=True)
+class SafeemaxApiConfig:
+    """Idempotent, non-blocking delivery to the Safeemax device API."""
+
+    enabled: bool = False
+    base_url: str = "http://76.13.131.115:4000"
+    device_id: str = ""
+    vehicle: str = ""
+    driver: str | None = None
+    location: str = ""
+    battery: int | None = None
+    outbox_dir: str = "incidents/api_outbox"
+    request_timeout_sec: float = 5.0
+    retry_initial_sec: float = 1.0
+    retry_max_sec: float = 30.0
+    queue_size: int = 256
+    event_states: list[str] = field(
+        default_factory=lambda: ["FATIGUE_WARNING", "DROWSY", "CRITICAL"]
+    )
+    event_violations: list[str] = field(
+        default_factory=lambda: ["PHONE_USE", "SMOKING", "EATING", "SEATBELT_MISSING"]
+    )
+
+
+@dataclass(slots=True)
 class RuntimeConfig:
     camera: CameraConfig = field(default_factory=CameraConfig)
     perception: PerceptionConfig = field(default_factory=PerceptionConfig)
@@ -317,6 +341,7 @@ class RuntimeConfig:
     hmi: HMIConfig = field(default_factory=HMIConfig)
     dashboard: DashboardConfig = field(default_factory=DashboardConfig)
     power: PowerConfig = field(default_factory=PowerConfig)
+    safeemax_api: SafeemaxApiConfig = field(default_factory=SafeemaxApiConfig)
     deployment_mode: str = "SHADOW"
     active_model_path: str = "models/drowsiness/active_model.json"
     inference_interval_sec: float = 0.5
@@ -364,6 +389,7 @@ def load_config(path: Path) -> RuntimeConfig:
         "hmi": HMIConfig,
         "dashboard": DashboardConfig,
         "power": PowerConfig,
+        "safeemax_api": SafeemaxApiConfig,
     }
     for key, cls in nested.items():
         if key in raw:
@@ -548,6 +574,27 @@ def load_config(path: Path) -> RuntimeConfig:
         config.drift.recovery_consecutive_windows,
     ) <= 0:
         raise ValueError("drift feature/window counts must be positive")
+    api = config.safeemax_api
+    api.base_url = str(api.base_url).rstrip("/")
+    if not api.base_url.startswith(("http://", "https://")):
+        raise ValueError("safeemax_api.base_url must use http or https")
+    if api.enabled and (not api.device_id.strip() or not api.vehicle.strip()):
+        raise ValueError("safeemax_api.device_id and vehicle are required when enabled")
+    if api.enabled and config.deployment_mode != "ACTIVE":
+        raise ValueError("safeemax_api may only be enabled in ACTIVE deployment mode")
+    if min(
+        api.request_timeout_sec,
+        api.retry_initial_sec,
+        api.retry_max_sec,
+        api.queue_size,
+    ) <= 0 or api.retry_initial_sec > api.retry_max_sec:
+        raise ValueError("safeemax_api timeout, retry, and queue settings are invalid")
+    if api.battery is not None and not 0 <= api.battery <= 100:
+        raise ValueError("safeemax_api.battery must be between 0 and 100")
+    if not set(api.event_states) <= known_states:
+        raise ValueError("safeemax_api.event_states contains unsupported states")
+    if not set(api.event_violations) <= known_violations:
+        raise ValueError("safeemax_api.event_violations contains unsupported violations")
     config.alarm.mode = str(config.alarm.mode).upper()
     if config.alarm.mode not in {"OFF", "LOG_ONLY", "LOCAL"}:
         raise ValueError("alarm.mode must be OFF, LOG_ONLY or LOCAL")
