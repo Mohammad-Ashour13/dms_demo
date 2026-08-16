@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import threading
 import time
+from email.parser import BytesParser
+from email.policy import default
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,26 +14,34 @@ import pytest
 from dms_final_system.runtime.config import load_config
 from dms_final_system.runtime.integration.safeemax import (
     DeliveryResult,
-    SafeemaxEventClient,
-    SafeemaxEventPublisher,
+    SafeemaxDeviceClient,
+    SafeemaxDevicePublisher,
 )
-from dms_final_system.shared.contracts import DriverState
+from dms_final_system.shared.contracts import DriverState, IncidentRecord
 
 
 class FakeTelemetry:
     def __init__(self):
         self.records = []
+        self.subscribers = []
 
     def emit(self, stage, event, payload=None, **kwargs):
-        self.records.append((stage, event, payload or {}, kwargs))
+        record = (stage, event, payload or {}, kwargs)
+        self.records.append(record)
+
+    def add_subscriber(self, subscriber):
+        self.subscribers.append(subscriber)
+
+    def remove_subscriber(self, subscriber):
+        self.subscribers.remove(subscriber)
 
 
 class FakeClient:
     def __init__(self):
-        self.payloads = []
+        self.messages = []
 
-    def publish(self, payload):
-        self.payloads.append(payload)
+    def publish(self, message, **kwargs):
+        self.messages.append((message, kwargs))
         return True
 
 
@@ -43,9 +53,33 @@ def _decision(state, violations=(), probability=0.8):
     )
 
 
-def test_publisher_emits_only_newly_active_alarm_types():
+def _event_message(message_id="event-1"):
+    return {
+        "id": message_id,
+        "type": "event",
+        "deviceId": "device-1",
+        "sentAt": "2026-08-16T12:00:00+00:00",
+        "data": {
+            "modelVersion": "model-1",
+            "alarmType": "DROWSY",
+            "vehicle": "vehicle-1",
+            "confidence": 90,
+            "severity": "high",
+        },
+    }
+
+
+def _pending_bundles(path: Path) -> list[Path]:
+    return [
+        item
+        for item in path.iterdir()
+        if item.is_dir() and item.name != "rejected" and not item.name.startswith(".")
+    ]
+
+
+def test_publisher_emits_only_newly_active_alarm_types_in_one_url_envelope():
     client = FakeClient()
-    publisher = SafeemaxEventPublisher(
+    publisher = SafeemaxDevicePublisher(
         client,
         device_id="device-1",
         vehicle="vehicle-7",
@@ -66,63 +100,70 @@ def test_publisher_emits_only_newly_active_alarm_types():
         packet, _decision("NORMAL", ["PHONE_USE"], None), "model-1"
     ) == ["PHONE_USE"]
 
-    assert len(client.payloads) == 3
-    first = client.payloads[0]
+    messages = [message for message, _ in client.messages]
+    assert len(messages) == 3
+    first = messages[0]
+    assert first["type"] == "event"
     assert first["deviceId"] == "device-1"
-    assert first["vehicle"] == "vehicle-7"
-    assert first["alarmType"] == "DROWSY"
-    assert first["severity"] == "high"
-    assert first["confidence"] == 91.0
-    assert first["occurredAt"] == packet.utc_timestamp
-    assert len({item["eventId"] for item in client.payloads}) == 3
+    assert first["sentAt"] == packet.utc_timestamp
+    assert first["data"]["vehicle"] == "vehicle-7"
+    assert first["data"]["alarmType"] == "DROWSY"
+    assert first["data"]["severity"] == "high"
+    assert first["data"]["confidence"] == 91.0
+    assert len({item["id"] for item in messages}) == 3
 
 
-def test_client_persists_then_removes_acknowledged_event(tmp_path, monkeypatch):
+def test_status_is_throttled_to_configured_interval():
+    client = FakeClient()
+    publisher = SafeemaxDevicePublisher(
+        client,
+        device_id="device-1",
+        vehicle="vehicle-1",
+        status_interval_sec=5.0,
+    )
+    status = {"schema_version": "dashboard-status-v1", "runtime": {"status": "RUNNING"}}
+    assert publisher.publish_status(status, monotonic_sec=10.0)
+    assert not publisher.publish_status(status, monotonic_sec=14.9)
+    assert publisher.publish_status(status, monotonic_sec=15.0)
+    assert [item[0]["type"] for item in client.messages] == ["status", "status"]
+
+
+def test_client_persists_then_removes_acknowledged_message(tmp_path, monkeypatch):
     telemetry = FakeTelemetry()
     delivered = []
 
-    def fake_post(self, payload):
-        delivered.append(payload)
+    def fake_post_bundle(self, bundle):
+        message = json.loads((bundle / self.MANIFEST_NAME).read_text())["message"]
+        delivered.append(message)
         if len(delivered) == 1:
             raise RuntimeError("temporary network failure")
-        return DeliveryResult(200, True)
+        return DeliveryResult(200, True), message
 
-    monkeypatch.setattr(SafeemaxEventClient, "_post", fake_post)
-    client = SafeemaxEventClient(
-        "http://api.example",
+    monkeypatch.setattr(SafeemaxDeviceClient, "_post_bundle", fake_post_bundle)
+    client = SafeemaxDeviceClient(
+        "http://api.example/api/device-data",
         tmp_path / "outbox",
         telemetry,
         retry_initial_sec=0.01,
         retry_max_sec=0.02,
     )
-    payload = {
-        "eventId": "event-1",
-        "deviceId": "device-1",
-        "modelVersion": "model-1",
-        "alarmType": "DROWSY",
-        "vehicle": "vehicle-1",
-        "confidence": 90,
-        "occurredAt": "2026-08-16T12:00:00+00:00",
-        "severity": "high",
-    }
+    payload = _event_message()
     try:
         assert client.publish(payload)
         deadline = time.monotonic() + 2.0
-        while (
-            len(delivered) < 2 or list((tmp_path / "outbox").glob("*.json"))
-        ) and time.monotonic() < deadline:
+        while (len(delivered) < 2 or _pending_bundles(tmp_path / "outbox")) and time.monotonic() < deadline:
             time.sleep(0.01)
         assert delivered == [payload, payload]
-        assert not list((tmp_path / "outbox").glob("*.json"))
+        assert not _pending_bundles(tmp_path / "outbox")
         assert client.retries == 1
         assert client.duplicates == 1
-        assert any(event == "event_retry" for _, event, _, _ in telemetry.records)
-        assert any(event == "event_delivered" for _, event, _, _ in telemetry.records)
+        assert any(event == "message_retry" for _, event, _, _ in telemetry.records)
+        assert any(event == "message_delivered" for _, event, _, _ in telemetry.records)
     finally:
         client.close()
 
 
-def test_client_posts_documented_json_contract(tmp_path):
+def test_client_posts_documented_json_contract_to_single_path(tmp_path):
     received = []
 
     class Handler(BaseHTTPRequestHandler):
@@ -135,7 +176,7 @@ def test_client_posts_documented_json_contract(tmp_path):
                     "payload": json.loads(self.rfile.read(length)),
                 }
             )
-            body = json.dumps({"accepted": True, "duplicate": False}).encode()
+            body = json.dumps({"ok": True, "duplicate": False}).encode()
             self.send_response(201)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
@@ -149,22 +190,12 @@ def test_client_posts_documented_json_contract(tmp_path):
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
     server_thread.start()
     telemetry = FakeTelemetry()
-    client = SafeemaxEventClient(
-        f"http://127.0.0.1:{server.server_port}",
+    client = SafeemaxDeviceClient(
+        f"http://127.0.0.1:{server.server_port}/api/device-data",
         tmp_path / "outbox",
         telemetry,
     )
-    payload = {
-        "eventId": "event-http-1",
-        "deviceId": "device-1",
-        "modelVersion": "model-1",
-        "alarmType": "CRITICAL",
-        "vehicle": "vehicle-1",
-        "driver": None,
-        "confidence": 99.5,
-        "occurredAt": "2026-08-16T12:00:00+00:00",
-        "severity": "critical",
-    }
+    payload = _event_message("event-http-1")
     try:
         assert client.publish(payload)
         deadline = time.monotonic() + 2.0
@@ -172,11 +203,96 @@ def test_client_posts_documented_json_contract(tmp_path):
             time.sleep(0.01)
         assert received == [
             {
-                "path": "/api/events",
+                "path": "/api/device-data",
                 "content_type": "application/json",
                 "payload": payload,
             }
         ]
+    finally:
+        client.close()
+        server.shutdown()
+        server.server_close()
+        server_thread.join(timeout=2.0)
+
+
+def test_incident_uses_multipart_on_the_same_path(tmp_path):
+    received = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            length = int(self.headers["Content-Length"])
+            body = self.rfile.read(length)
+            mime = BytesParser(policy=default).parsebytes(
+                b"Content-Type: "
+                + self.headers["Content-Type"].encode()
+                + b"\r\nMIME-Version: 1.0\r\n\r\n"
+                + body
+            )
+            parts = {}
+            for part in mime.iter_parts():
+                name = part.get_param("name", header="content-disposition")
+                parts[name] = {
+                    "filename": part.get_filename(),
+                    "content_type": part.get_content_type(),
+                    "body": part.get_payload(decode=True),
+                }
+            received.append({"path": self.path, "parts": parts})
+            response = json.dumps({"ok": True, "duplicate": False}).encode()
+            self.send_response(201)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(response)))
+            self.end_headers()
+            self.wfile.write(response)
+
+        def log_message(self, _format, *_args):
+            return
+
+    incident_dir = tmp_path / "incidents" / "incident-1"
+    incident_dir.mkdir(parents=True)
+    video = incident_dir / "video.mp4"
+    telemetry_path = incident_dir / "telemetry.jsonl"
+    video.write_bytes(b"video-bytes")
+    telemetry_path.write_text('{"event":"decision"}\n', encoding="utf-8")
+    metadata = {
+        "incident_id": "incident-1",
+        "video_sha256": "unused-by-transport-test",
+        "highest_state": "DROWSY",
+    }
+    (incident_dir / "incident.json").write_text(json.dumps(metadata), encoding="utf-8")
+    incident = IncidentRecord(
+        "incident-1", "session-1", "start", "end", "DROWSY", [], 0.9, [],
+        "model-1", "feature-1", "fusion-1", video, telemetry_path,
+    )
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+    client = SafeemaxDeviceClient(
+        f"http://127.0.0.1:{server.server_port}/api/device-data",
+        tmp_path / "api-outbox",
+        FakeTelemetry(),
+    )
+    publisher = SafeemaxDevicePublisher(
+        client, device_id="device-1", vehicle="vehicle-1"
+    )
+    try:
+        assert publisher.publish_incident(incident)
+        deadline = time.monotonic() + 2.0
+        while not received and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert len(received) == 1
+        assert received[0]["path"] == "/api/device-data"
+        parts = received[0]["parts"]
+        assert set(parts) == {"message", "video", "telemetry"}
+        message = json.loads(parts["message"]["body"])
+        assert message["id"] == "incident-1"
+        assert message["type"] == "incident"
+        assert message["deviceId"] == "device-1"
+        assert message["data"] == metadata
+        assert parts["video"]["filename"] == "video.mp4"
+        assert parts["video"]["body"] == b"video-bytes"
+        assert parts["telemetry"]["filename"] == "telemetry.jsonl"
+        assert parts["telemetry"]["body"] == telemetry_path.read_bytes()
     finally:
         client.close()
         server.shutdown()
@@ -209,4 +325,9 @@ def test_api_integration_requires_active_deployment(tmp_path):
     _write_config(path, "ACTIVE")
     config = load_config(path)
     assert config.safeemax_api.enabled
-    assert config.safeemax_api.base_url == "http://76.13.131.115:4000"
+    assert config.safeemax_api.endpoint_url == (
+        "http://76.13.131.115:4000/api/device-data"
+    )
+    assert config.safeemax_api.status_interval_sec == 5.0
+    assert config.safeemax_api.incident_upload_enabled
+    assert config.safeemax_api.telemetry_upload_enabled

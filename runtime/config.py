@@ -305,7 +305,8 @@ class SafeemaxApiConfig:
     """Idempotent, non-blocking delivery to the Safeemax device API."""
 
     enabled: bool = False
-    base_url: str = "http://76.13.131.115:4000"
+    endpoint_url: str = "http://76.13.131.115:4000/api/device-data"
+    auth_token_env: str = ""
     device_id: str = ""
     vehicle: str = ""
     driver: str | None = None
@@ -316,6 +317,12 @@ class SafeemaxApiConfig:
     retry_initial_sec: float = 1.0
     retry_max_sec: float = 30.0
     queue_size: int = 256
+    status_interval_sec: float = 5.0
+    incident_upload_enabled: bool = True
+    telemetry_upload_enabled: bool = True
+    telemetry_batch_size: int = 250
+    telemetry_flush_interval_sec: float = 15.0
+    telemetry_queue_size: int = 2000
     event_states: list[str] = field(
         default_factory=lambda: ["FATIGUE_WARNING", "DROWSY", "CRITICAL"]
     )
@@ -575,9 +582,9 @@ def load_config(path: Path) -> RuntimeConfig:
     ) <= 0:
         raise ValueError("drift feature/window counts must be positive")
     api = config.safeemax_api
-    api.base_url = str(api.base_url).rstrip("/")
-    if not api.base_url.startswith(("http://", "https://")):
-        raise ValueError("safeemax_api.base_url must use http or https")
+    api.endpoint_url = str(api.endpoint_url).strip()
+    if not api.endpoint_url.startswith(("http://", "https://")):
+        raise ValueError("safeemax_api.endpoint_url must use http or https")
     if api.enabled and (not api.device_id.strip() or not api.vehicle.strip()):
         raise ValueError("safeemax_api.device_id and vehicle are required when enabled")
     if api.enabled and config.deployment_mode != "ACTIVE":
@@ -587,8 +594,14 @@ def load_config(path: Path) -> RuntimeConfig:
         api.retry_initial_sec,
         api.retry_max_sec,
         api.queue_size,
+        api.status_interval_sec,
+        api.telemetry_batch_size,
+        api.telemetry_flush_interval_sec,
+        api.telemetry_queue_size,
     ) <= 0 or api.retry_initial_sec > api.retry_max_sec:
         raise ValueError("safeemax_api timeout, retry, and queue settings are invalid")
+    if api.telemetry_batch_size > 500:
+        raise ValueError("safeemax_api.telemetry_batch_size must not exceed 500")
     if api.battery is not None and not 0 <= api.battery <= 100:
         raise ValueError("safeemax_api.battery must be between 0 and 100")
     if not set(api.event_states) <= known_states:

@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 
 def _json_default(value):
@@ -52,6 +52,8 @@ class StructuredTelemetry:
         self.queue: queue.Queue[dict | None] = queue.Queue(maxsize=10_000)
         self.tail: deque[dict] = deque()
         self.tail_lock = threading.Lock()
+        self.subscribers: list[Callable[[dict[str, Any]], None]] = []
+        self.subscriber_lock = threading.Lock()
         self.dropped_records = 0
         self.worker = threading.Thread(target=self._run, name="telemetry-writer", daemon=True)
         self.worker.start()
@@ -74,6 +76,28 @@ class StructuredTelemetry:
             self.queue.put_nowait(record)
         except queue.Full:
             self.dropped_records += 1
+            return
+        with self.subscriber_lock:
+            subscribers = list(self.subscribers)
+        for subscriber in subscribers:
+            try:
+                subscriber(record)
+            except Exception:
+                # A remote/optional sink can never interfere with the local
+                # structured log or the safety loop.
+                continue
+
+    def add_subscriber(self, subscriber: Callable[[dict[str, Any]], None]) -> None:
+        with self.subscriber_lock:
+            if subscriber not in self.subscribers:
+                self.subscribers.append(subscriber)
+
+    def remove_subscriber(self, subscriber: Callable[[dict[str, Any]], None]) -> None:
+        with self.subscriber_lock:
+            try:
+                self.subscribers.remove(subscriber)
+            except ValueError:
+                pass
 
     def _run(self) -> None:
         while True:

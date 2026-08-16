@@ -146,8 +146,10 @@ def run(config_path: Path, replay_path: Path | None = None) -> None:
     from dms_final_system.runtime.hmi import VisualHMI
     from dms_final_system.runtime.integration import (
         EvidenceBus,
-        SafeemaxEventClient,
-        SafeemaxEventPublisher,
+        SafeemaxDeviceClient,
+        SafeemaxDevicePublisher,
+        SafeemaxIncidentSink,
+        SafeemaxTelemetryBatcher,
     )
     from dms_final_system.runtime.model.bundle import (
         assert_deployment_allowed,
@@ -387,19 +389,29 @@ def run(config_path: Path, replay_path: Path | None = None) -> None:
         raise
     safeemax_client = None
     safeemax_publisher = None
+    safeemax_telemetry_batcher = None
     if config.safeemax_api.enabled and source_kind == "camera":
         api_config = config.safeemax_api
         try:
-            safeemax_client = SafeemaxEventClient(
-                api_config.base_url,
+            auth_token = (
+                os.environ.get(api_config.auth_token_env, "")
+                if api_config.auth_token_env else ""
+            )
+            if api_config.auth_token_env and not auth_token:
+                raise ValueError(
+                    f"Device API token environment variable {api_config.auth_token_env!r} is empty"
+                )
+            safeemax_client = SafeemaxDeviceClient(
+                api_config.endpoint_url,
                 _resolve(api_config.outbox_dir),
                 telemetry,
+                auth_token=auth_token,
                 request_timeout_sec=api_config.request_timeout_sec,
                 retry_initial_sec=api_config.retry_initial_sec,
                 retry_max_sec=api_config.retry_max_sec,
                 queue_size=api_config.queue_size,
             )
-            safeemax_publisher = SafeemaxEventPublisher(
+            safeemax_publisher = SafeemaxDevicePublisher(
                 safeemax_client,
                 device_id=api_config.device_id,
                 vehicle=api_config.vehicle,
@@ -408,8 +420,21 @@ def run(config_path: Path, replay_path: Path | None = None) -> None:
                 battery=api_config.battery,
                 event_states=api_config.event_states,
                 event_violations=api_config.event_violations,
+                status_interval_sec=api_config.status_interval_sec,
             )
+            if recorder is not None and api_config.incident_upload_enabled:
+                recorder.sink = SafeemaxIncidentSink(safeemax_publisher)
+            if api_config.telemetry_upload_enabled:
+                safeemax_telemetry_batcher = SafeemaxTelemetryBatcher(
+                    telemetry,
+                    safeemax_publisher,
+                    batch_size=api_config.telemetry_batch_size,
+                    flush_interval_sec=api_config.telemetry_flush_interval_sec,
+                    queue_size=api_config.telemetry_queue_size,
+                )
         except Exception:
+            if safeemax_telemetry_batcher:
+                safeemax_telemetry_batcher.close()
             if safeemax_client:
                 safeemax_client.close()
             alarm.close()
@@ -966,6 +991,20 @@ def run(config_path: Path, replay_path: Path | None = None) -> None:
                     ),
                 )
                 dashboard.publish_status(status)
+                if safeemax_publisher is not None:
+                    try:
+                        safeemax_publisher.publish_status(
+                            status,
+                            monotonic_sec=packet.monotonic_sec,
+                        )
+                    except Exception as exc:
+                        telemetry.emit(
+                            "SafeemaxAPI",
+                            "status_queue_failed",
+                            {"error": repr(exc)},
+                            monotonic_sec=packet.monotonic_sec,
+                            level="ERROR",
+                        )
 
             if packet.monotonic_sec - last_health >= 5.0:
                 last_health = packet.monotonic_sec
@@ -1018,6 +1057,8 @@ def run(config_path: Path, replay_path: Path | None = None) -> None:
             evaluation.close()
         dashboard.close()
         metrics_sampler.close()
+        if safeemax_telemetry_batcher:
+            safeemax_telemetry_batcher.close()
         if safeemax_client:
             safeemax_client.close()
         telemetry.emit("Runtime", "session_finished", {"processed_frames": processed})
