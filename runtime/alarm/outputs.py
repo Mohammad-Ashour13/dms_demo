@@ -186,13 +186,83 @@ LinuxAudioOutput = PlatformAudioOutput
 
 
 class GPIOBuzzerOutput(AlarmOutput):
-    """Production extension point; intentionally disabled until hardware is specified."""
+    """Drive a transistor-switched buzzer without loading a GPIO directly.
+
+    ``pin`` uses BCM numbering (GPIO18, not physical header pin 18).  An active
+    buzzer is power-modulated at ``pwm_frequency_hz``; a passive buzzer uses the
+    tone frequency from each pattern.  Hardware access is imported lazily so
+    laptop/replay installations do not need GPIO packages.
+    """
+
+    def __init__(
+        self,
+        pin: int = 18,
+        *,
+        buzzer_type: str = "active",
+        pwm_frequency_hz: float = 100.0,
+        master_gain: float = 1.0,
+    ):
+        self.pin = int(pin)
+        self.buzzer_type = str(buzzer_type).lower()
+        self.pwm_frequency_hz = float(pwm_frequency_hz)
+        self.master_gain = float(master_gain)
+        self.device = None
+        self.lock = threading.RLock()
 
     def probe(self) -> tuple[bool, str]:
-        return False, "GPIO buzzer hardware is not configured"
+        if self.buzzer_type not in {"active", "passive"}:
+            return False, f"unsupported GPIO buzzer type: {self.buzzer_type}"
+        try:
+            from gpiozero import PWMOutputDevice
+
+            self.device = PWMOutputDevice(
+                self.pin,
+                active_high=True,
+                initial_value=0.0,
+                frequency=self.pwm_frequency_hz,
+            )
+        except Exception as exc:
+            self.device = None
+            return False, f"GPIO{self.pin} unavailable: {exc}"
+        return True, f"gpiozero PWM GPIO{self.pin} ({self.buzzer_type} buzzer)"
 
     def play(self, command: AlarmCommand, stop_event: threading.Event) -> str:
-        raise NotImplementedError("Configure a transistor-driven buzzer before enabling GPIO output")
+        if self.device is None:
+            raise RuntimeError("GPIO buzzer was not probed")
+        try:
+            pattern = ALARM_PATTERNS[command.pattern]
+        except KeyError as exc:
+            raise RuntimeError(f"unknown GPIO alarm pattern: {command.pattern}") from exc
+
+        level = max(0.0, min(1.0, self.master_gain * pattern.gain_scale))
+        # A passive piezo needs alternating edges; 50% is its maximum useful
+        # duty cycle.  An active buzzer accepts DC, so duty directly controls
+        # its average power (the perceived result still depends on the module).
+        duty_cycle = level if self.buzzer_type == "active" else 0.5 * level
+        for pulse in pattern.pulses:
+            if stop_event.is_set():
+                self.stop()
+                return "PREEMPTED"
+            with self.lock:
+                if self.buzzer_type == "passive":
+                    self.device.frequency = pulse.frequency_hz
+                self.device.value = duty_cycle
+            if stop_event.wait(pulse.duration_sec):
+                self.stop()
+                return "PREEMPTED"
+            self.stop()
+            if pulse.gap_after_sec and stop_event.wait(pulse.gap_after_sec):
+                return "PREEMPTED"
+        return "COMPLETED"
 
     def stop(self) -> None:
-        return None
+        with self.lock:
+            if self.device is not None:
+                self.device.value = 0.0
+
+    def close(self) -> None:
+        with self.lock:
+            device, self.device = self.device, None
+        if device is not None:
+            device.off()
+            device.close()

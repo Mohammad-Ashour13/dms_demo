@@ -18,6 +18,12 @@ class TonePattern:
 
 
 ALARM_PATTERNS = {
+    # Short and deliberately quiet: used for phone/smoking/eating violations.
+    "DISTRACTION": TonePattern(
+        "DISTRACTION",
+        (TonePulse(620.0, 0.12, 0.10), TonePulse(620.0, 0.12)),
+        0.30,
+    ),
     "DROWSY": TonePattern("DROWSY", (TonePulse(750.0, 0.45),), 0.875),
     "DROWSY_ESCALATED": TonePattern(
         "DROWSY_ESCALATED",

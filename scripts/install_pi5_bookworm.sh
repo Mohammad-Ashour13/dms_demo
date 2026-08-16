@@ -10,7 +10,7 @@ fi
 sudo apt-get update
 sudo apt-get install -y --no-install-recommends \
   python3-picamera2 python3-venv python3-pip ffmpeg libgl1 libglib2.0-0 \
-  raspi-utils
+  python3-gpiozero python3-lgpio raspi-utils
 
 python3 -m venv --system-site-packages "${project_dir}/.venv"
 "${project_dir}/.venv/bin/python" -m pip install --upgrade pip setuptools wheel

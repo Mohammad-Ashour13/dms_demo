@@ -252,10 +252,15 @@ class AlarmConfig:
     allow_replay_audio: bool = False
     backend: str = "auto"
     device: str = "default"
+    output: str = "audio"
+    gpio_pin: int = 18
+    gpio_buzzer_type: str = "active"
+    gpio_pwm_frequency_hz: float = 100.0
     required: bool = False
     startup_self_test: bool = False
     master_gain: float = 0.40
     queue_size: int = 8
+    behavior_reminder_sec: float = 15.0
     drowsy_reminder_sec: float = 10.0
     drowsy_rearm_sec: float = 5.0
     drowsy_ack_silence_sec: float = 10.0
@@ -609,14 +614,25 @@ def load_config(path: Path) -> RuntimeConfig:
     if not set(api.event_violations) <= known_violations:
         raise ValueError("safeemax_api.event_violations contains unsupported violations")
     config.alarm.mode = str(config.alarm.mode).upper()
+    config.alarm.output = str(config.alarm.output).lower()
+    config.alarm.gpio_buzzer_type = str(config.alarm.gpio_buzzer_type).lower()
     if config.alarm.mode not in {"OFF", "LOG_ONLY", "LOCAL"}:
         raise ValueError("alarm.mode must be OFF, LOG_ONLY or LOCAL")
+    if config.alarm.output not in {"audio", "gpio"}:
+        raise ValueError("alarm.output must be audio or gpio")
+    if config.alarm.gpio_buzzer_type not in {"active", "passive"}:
+        raise ValueError("alarm.gpio_buzzer_type must be active or passive")
+    if not 0 <= config.alarm.gpio_pin <= 27:
+        raise ValueError("alarm.gpio_pin must be a BCM GPIO number between 0 and 27")
+    if config.alarm.gpio_pwm_frequency_hz <= 0:
+        raise ValueError("alarm.gpio_pwm_frequency_hz must be positive")
     if config.alarm.mode == "LOCAL" and config.deployment_mode == "SHADOW" and not config.alarm.allow_in_shadow:
         raise ValueError("LOCAL alarm in SHADOW requires alarm.allow_in_shadow=true")
     if not 0 <= config.alarm.master_gain <= 1:
         raise ValueError("alarm.master_gain must be between 0 and 1")
     if min(
         config.alarm.queue_size,
+        config.alarm.behavior_reminder_sec,
         config.alarm.drowsy_reminder_sec,
         config.alarm.critical_reminder_sec,
         config.alarm.acknowledge_open_sec,

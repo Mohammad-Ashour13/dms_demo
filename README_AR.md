@@ -29,6 +29,7 @@
 - `docs/RUNTIME_V2_REPAIR_RUNBOOK_AR.md`
 - `docs/MODEL_V2_RETRAINING_PLAN_AR.md`
 - `docs/ALARM_DEMO_RUNBOOK_AR.md`
+- `docs/GPIO_BUZZER_WIRING_AR.md` — تحقق أرجل 2N2222A وتوصيل واختبار بزر GPIO18 بدرجات تنبيه مختلفة.
 - `docs/RUNTIME_V22_ALARM_REGRESSION.md`
 
 لعرض الدكتور مع صوت وشاشة استخدم `configs/runtime.laptop_alarm_demo.json`. للـReplay

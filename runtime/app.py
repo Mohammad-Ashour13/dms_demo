@@ -136,7 +136,12 @@ def run(config_path: Path, replay_path: Path | None = None) -> None:
     from dms_final_system.shared.contracts import AlarmLevel
     from dms_final_system.shared.feature_contract import RUNTIME_FEATURE_VERSION
     from dms_final_system.runtime.calibration import PersonalCalibrator
-    from dms_final_system.runtime.alarm import AlarmController, NullAlarmOutput, PlatformAudioOutput
+    from dms_final_system.runtime.alarm import (
+        AlarmController,
+        GPIOBuzzerOutput,
+        NullAlarmOutput,
+        PlatformAudioOutput,
+    )
     from dms_final_system.runtime.capture import ReplayCapture, create_live_capture
     from dms_final_system.runtime.dashboard import DashboardProcess
     from dms_final_system.runtime.events import EventEngine
@@ -363,11 +368,21 @@ def run(config_path: Path, replay_path: Path | None = None) -> None:
         source_kind == "camera"
         or (not config.alarm.live_camera_only and config.alarm.allow_replay_audio)
     )
-    alarm_output = (
-        PlatformAudioOutput(config.alarm.backend, config.alarm.device, config.alarm.master_gain)
-        if config.alarm.enabled and config.alarm.mode == "LOCAL" and audible_source
-        else NullAlarmOutput()
-    )
+    alarm_output = NullAlarmOutput()
+    if config.alarm.enabled and config.alarm.mode == "LOCAL" and audible_source:
+        if config.alarm.output == "gpio":
+            alarm_output = GPIOBuzzerOutput(
+                config.alarm.gpio_pin,
+                buzzer_type=config.alarm.gpio_buzzer_type,
+                pwm_frequency_hz=config.alarm.gpio_pwm_frequency_hz,
+                master_gain=config.alarm.master_gain,
+            )
+        else:
+            alarm_output = PlatformAudioOutput(
+                config.alarm.backend,
+                config.alarm.device,
+                config.alarm.master_gain,
+            )
     try:
         alarm = AlarmController(
             config.alarm, telemetry, alarm_output,

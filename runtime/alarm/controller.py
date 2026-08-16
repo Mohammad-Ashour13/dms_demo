@@ -14,7 +14,14 @@ from dms_final_system.runtime.alarm.outputs import AlarmOutput, NullAlarmOutput
 class AlarmController:
     """Edge- and timer-driven audible policy, deliberately separate from Fusion."""
 
-    PRIORITY = {"DROWSY": 20, "DROWSY_ESCALATED": 10, "CRITICAL": 0, "STARTUP": 30}
+    PRIORITY = {
+        "CRITICAL": 0,
+        "DROWSY_ESCALATED": 10,
+        "DROWSY": 20,
+        "STARTUP": 30,
+        "DISTRACTION": 40,
+    }
+    AUDIBLE_BEHAVIOR_VIOLATIONS = {"PHONE_USE", "SMOKING", "EATING"}
 
     def __init__(self, config, telemetry, output: AlarmOutput | None = None, *, audible=True):
         self.config = config
@@ -36,6 +43,10 @@ class AlarmController:
         self.acknowledged = False
         self.ack_silence_until: float | None = None
         self.drowsy_onsets: deque[float] = deque()
+        self.active_behavior_violations: set[str] = set()
+        self.behavior_episode_id: str | None = None
+        self.next_behavior_reminder: float | None = None
+        self.playing_priority: int | None = None
         self.command_history: list[AlarmCommand] = []
         self.worker = threading.Thread(target=self._run, name="alarm-output", daemon=True)
         ok, detail = self.output.probe()
@@ -141,6 +152,16 @@ class AlarmController:
             self._cancel_pending("PREEMPTED_BY_CRITICAL")
             self.play_stop.set()
             self.output.stop()
+        elif pattern in {"DROWSY", "DROWSY_ESCALATED"}:
+            self._cancel_lower_priority_pending(pattern)
+            with self.lock:
+                lower_priority_playing = bool(
+                    self.playing_priority is not None
+                    and self.playing_priority > self.PRIORITY[pattern]
+                )
+            if lower_priority_playing:
+                self.play_stop.set()
+                self.output.stop()
         self.sequence += 1
         try:
             self.queue.put_nowait((self.PRIORITY[pattern], self.sequence, command))
@@ -160,6 +181,86 @@ class AlarmController:
                 pending,
             )
             self.queue.task_done()
+
+    def _cancel_lower_priority_pending(self, pattern: str) -> None:
+        threshold = self.PRIORITY[pattern]
+        retained = []
+        while True:
+            try:
+                item = self.queue.get_nowait()
+            except queue.Empty:
+                break
+            priority, _, pending = item
+            self.queue.task_done()
+            if priority <= threshold:
+                retained.append(item)
+            else:
+                self._emit(
+                    "alarm_suppressed",
+                    {**pending.to_dict(), "reason": f"PREEMPTED_BY_{pattern}"},
+                    pending,
+                )
+        for item in retained:
+            self.queue.put_nowait(item)
+
+    def _issue_behavior(self, now, state, trigger, violations, incident_id) -> AlarmCommand:
+        if self.behavior_episode_id is None:
+            self.behavior_episode_id = f"behavior-{uuid.uuid4().hex[:10]}"
+        command = AlarmCommand(
+            alarm_id=f"alarm-command-{uuid.uuid4().hex[:10]}",
+            episode_id=self.behavior_episode_id,
+            monotonic_sec=float(now),
+            driver_state=state,
+            pattern="DISTRACTION",
+            trigger=trigger,
+            recurrence_count=1,
+            reason_codes=[f"BEHAVIOR_{item}" for item in sorted(violations)],
+            incident_id=incident_id,
+        )
+        self._emit("alarm_command_issued", command.to_dict(), command)
+        self.command_history.append(command)
+        self.status.command_count += 1
+        if trigger == "REMINDER":
+            self.status.reminder_count += 1
+        if not self.audible:
+            self._emit(
+                "alarm_suppressed",
+                {**command.to_dict(), "reason": "LOG_ONLY_OR_SOURCE_BLOCKED"},
+                command,
+            )
+            return command
+        self.sequence += 1
+        try:
+            self.queue.put_nowait((self.PRIORITY[command.pattern], self.sequence, command))
+        except queue.Full:
+            self._emit(
+                "alarm_suppressed",
+                {**command.to_dict(), "reason": "OUTPUT_QUEUE_FULL"},
+                command,
+                "WARNING",
+            )
+        return command
+
+    def _update_behavior_alarm(self, now, decision, incident_id) -> None:
+        current = set(decision.violations) & self.AUDIBLE_BEHAVIOR_VIOLATIONS
+        if not current:
+            self.active_behavior_violations.clear()
+            self.behavior_episode_id = None
+            self.next_behavior_reminder = None
+            return
+
+        onset = not self.active_behavior_violations
+        changed = current != self.active_behavior_violations
+        if onset or changed:
+            self._issue_behavior(now, decision.driver_state, "ONSET", current, incident_id)
+            self.next_behavior_reminder = now + self.config.behavior_reminder_sec
+        elif self.next_behavior_reminder is not None and now >= self.next_behavior_reminder:
+            self._issue_behavior(now, decision.driver_state, "REMINDER", current, incident_id)
+            self.next_behavior_reminder = now + self.config.behavior_reminder_sec
+        self.active_behavior_violations = current
+        self.status.active_pattern = "DISTRACTION"
+        self.status.episode_id = self.behavior_episode_id
+        self.status.next_reminder_sec = self.next_behavior_reminder
 
     def _is_escalated_drowsy(self, now: float) -> bool:
         recurrent = len(self.drowsy_onsets) >= self.config.escalation_episode_count
@@ -191,7 +292,16 @@ class AlarmController:
             self.status.active_pattern = "NONE"
             self.status.acknowledged = False
             self.status.next_reminder_sec = None
+            self._update_behavior_alarm(now, decision, incident_id)
             return self.snapshot()
+
+        # High-severity fatigue audio always takes precedence over behavior
+        # chirps.  A still-active violation may alert again only after it first
+        # clears and then reappears.
+        self.active_behavior_violations = (
+            set(decision.violations) & self.AUDIBLE_BEHAVIOR_VIOLATIONS
+        )
+        self.next_behavior_reminder = None
 
         entering = state != self.active_state
         if state == DriverState.CRITICAL:
@@ -282,6 +392,7 @@ class AlarmController:
             started = time.perf_counter()
             with self.lock:
                 self.status.audio_playing = True
+                self.playing_priority = self.PRIORITY[command.pattern]
             self._emit("audio_play_started", {**command.to_dict(), "command_latency_ms": max(0.0, (time.monotonic() - command.monotonic_sec) * 1000)}, command)
             try:
                 outcome = self.output.play(command, self.play_stop)
@@ -294,6 +405,7 @@ class AlarmController:
             finally:
                 with self.lock:
                     self.status.audio_playing = False
+                    self.playing_priority = None
                 self.queue.task_done()
 
     def close(self) -> None:

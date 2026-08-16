@@ -127,6 +127,36 @@ def test_warning_unknown_and_yawn_violation_never_issue_audio_command():
         controller.close()
 
 
+def test_phone_violation_uses_quiet_onset_and_rate_limited_reminder():
+    controller, _, _ = _controller(behavior_reminder_sec=15.0)
+    try:
+        for timestamp in (0.0, 1.0, 14.9, 15.0):
+            decision = _decision(timestamp, DriverState.NORMAL)
+            decision.violations = ["PHONE_USE"]
+            controller.update(timestamp, decision, _eyes(state="OPEN", open_sec=1.0))
+        assert [(item.pattern, item.trigger) for item in controller.command_history] == [
+            ("DISTRACTION", "ONSET"),
+            ("DISTRACTION", "REMINDER"),
+        ]
+    finally:
+        controller.close()
+
+
+def test_phone_alert_rearms_only_after_violation_clears():
+    controller, _, _ = _controller()
+    try:
+        phone = _decision(0.0, DriverState.NORMAL)
+        phone.violations = ["PHONE_USE"]
+        controller.update(0.0, phone, _eyes(state="OPEN", open_sec=1.0))
+        controller.update(1.0, _decision(1.0, DriverState.NORMAL), _eyes(state="OPEN", open_sec=1.0))
+        phone_again = _decision(2.0, DriverState.NORMAL)
+        phone_again.violations = ["PHONE_USE"]
+        controller.update(2.0, phone_again, _eyes(state="OPEN", open_sec=1.0))
+        assert [item.trigger for item in controller.command_history] == ["ONSET", "ONSET"]
+    finally:
+        controller.close()
+
+
 def test_replay_source_can_log_commands_without_playing_audio():
     telemetry, output = FakeTelemetry(), FakeAudio()
     config = AlarmConfig(enabled=True, mode="LOCAL", startup_self_test=False)

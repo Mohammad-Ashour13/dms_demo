@@ -1,4 +1,8 @@
-# دليل تشغيل إنذار DMS على اللابتوب
+# دليل تشغيل إنذار DMS
+
+لتوصيل واختبار بزر Raspberry على GPIO18 راجع
+[`GPIO_BUZZER_WIRING_AR.md`](GPIO_BUZZER_WIRING_AR.md). بقية هذا الدليل مخصصة
+لخرج سماعات اللابتوب.
 
 هذه النسخة مخصصة لـControlled Demo. يبقى الموديل `EXPERIMENTAL` ووضع النشر
 `SHADOW`؛ المسموح فقط هو صوت محلي وشاشة محلية، ولا يفعّل uploader أو أي actuator
