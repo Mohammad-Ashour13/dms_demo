@@ -10,6 +10,7 @@ from dms_final_system.runtime.app import (
     _eye_signal_blockers,
     _normalize_behavior_detections,
     _normalize_face_bbox,
+    _remote_api_snapshot,
 )
 from dms_final_system.runtime.config import PowerConfig, load_config
 from dms_final_system.runtime.monitoring import (
@@ -43,6 +44,15 @@ def test_pi5_profile_has_fixed_camera_recording_dashboard_and_power_contracts():
     assert config.recorder.require_copy_mux is True
     assert config.recorder.reserve_free_bytes == 2 * 1024**3
     assert config.dashboard.enabled and config.dashboard.port == 8080
+
+    remote = _remote_api_snapshot(config, None, "camera")
+    assert remote["connection_status"] == "DISABLED"
+    assert "Disabled in runtime configuration" in remote["status_reason"]
+    assert "device ID is not configured" in remote["status_reason"]
+    assert "vehicle ID is not configured" in remote["status_reason"]
+    assert "SHADOW mode blocks remote delivery" in remote["status_reason"]
+    assert remote["last_error"] == ""
+    assert remote["endpoint_url"] == config.safeemax_api.endpoint_url
 
 
 def test_eye_signal_blockers_explain_dashboard_quality_and_pose_rejection():

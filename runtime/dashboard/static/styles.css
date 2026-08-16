@@ -26,3 +26,13 @@
 .behavior-chip.raw{border-color:#aab6b0;background:#f4f7f5;color:#68746e}.behavior-chip.raw strong{color:#68746e}
 .behavior-chip.confirmed{border-color:rgba(212,59,69,.55);background:#fff0f1;color:var(--red);box-shadow:0 0 0 2px rgba(212,59,69,.08)}.behavior-chip.confirmed strong{color:var(--red)}
 @media(max-width:680px){.behavior-strip{grid-template-columns:1fr}.metric-grid{grid-template-columns:1fr 1fr}}
+
+/* Landing-server delivery health. */
+@media(min-width:951px){.metric-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
+.metric small{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.landing-status small{white-space:normal;overflow-wrap:anywhere}
+.landing-status[data-state="ONLINE"]{border-top-color:var(--green)}
+.landing-status[data-state="CONNECTING"],.landing-status[data-state="RETRYING"]{border-top-color:var(--amber)}
+.landing-status[data-state="DISABLED"],.landing-status[data-state="SUPPRESSED"],.landing-status[data-state="REJECTED"]{border-top-color:var(--red)}
+.landing-status[data-state="ONLINE"] strong{color:var(--green)}
+.landing-status[data-state="RETRYING"] strong,.landing-status[data-state="DISABLED"] strong,.landing-status[data-state="SUPPRESSED"] strong,.landing-status[data-state="REJECTED"] strong{color:var(--red)}

@@ -64,6 +64,8 @@ def test_dashboard_read_only_health_status_and_incident_apis(tmp_path):
             assert 'id="behavior-phone"' in home_text
             assert 'id="behavior-smoking"' in home_text
             assert 'id="behavior-eating"' in home_text
+            assert 'id="landing-card"' in home_text
+            assert 'id="landing-state"' in home_text
             script = await client.get("/static/app.js")
             assert script.headers["Cache-Control"].startswith("no-store")
             script_text = await script.text()
@@ -73,6 +75,8 @@ def test_dashboard_read_only_health_status_and_incident_apis(tmp_path):
             assert "'RAW'" in script_text
             assert "event_relative_ear" in script_text
             assert "eye_signal_blockers" in script_text
+            assert "remote_api" in script_text
+            assert "last_success_utc" in script_text
             incidents = await client.get("/api/v1/incidents?limit=invalid")
             payload = await incidents.json()
             assert payload["schema_version"] == "incident-list-v1"

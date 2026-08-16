@@ -157,6 +157,12 @@ def test_client_persists_then_removes_acknowledged_message(tmp_path, monkeypatch
         assert not _pending_bundles(tmp_path / "outbox")
         assert client.retries == 1
         assert client.duplicates == 1
+        snapshot = client.snapshot()
+        assert snapshot["connection_status"] == "ONLINE"
+        assert snapshot["last_success_utc"]
+        assert snapshot["last_http_status"] == 200
+        assert snapshot["last_message_id"] == payload["id"]
+        assert snapshot["last_message_type"] == "event"
         assert any(event == "message_retry" for _, event, _, _ in telemetry.records)
         assert any(event == "message_delivered" for _, event, _, _ in telemetry.records)
     finally:

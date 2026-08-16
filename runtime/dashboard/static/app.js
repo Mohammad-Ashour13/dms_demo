@@ -140,6 +140,7 @@ function updateStatus(snapshot) {
   const models = snapshot.models || {};
   const recording = snapshot.recording || {};
   const dashboard = snapshot.dashboard || {};
+  const remoteApi = snapshot.remote_api || {};
   const queues = perf.queues || {};
   const latency = perf.latency || {};
   const flags = system.throttled || {};
@@ -211,6 +212,26 @@ function updateStatus(snapshot) {
   setText('cpu-clock', currentClock + maxClock);
   setText('storage-free', bytes((system.disk || {}).free_bytes));
   setText('incident-count', `${recording.incident_count || 0} incidents`);
+  const landingState = remoteApi.connection_status
+    || (remoteApi.enabled ? 'CONNECTING' : 'DISABLED');
+  const landingCard = $('landing-card');
+  setText('landing-state', landingState);
+  landingCard.dataset.state = landingState;
+  const pending = Number(remoteApi.pending || 0);
+  const delivered = Number(remoteApi.delivered || 0);
+  const retries = Number(remoteApi.retries || 0);
+  const statusReason = remoteApi.status_reason || remoteApi.last_error || '';
+  let landingDetail = `${pending} pending · ${delivered} delivered`;
+  if (landingState === 'DISABLED' || landingState === 'SUPPRESSED') {
+    landingDetail = statusReason || 'Remote delivery is not active';
+  } else if (remoteApi.last_error) {
+    landingDetail = `${pending} pending · ${retries} retries · ${remoteApi.last_error}`;
+  } else if (remoteApi.last_success_utc) {
+    landingDetail = `${delivered} delivered · last success ${remoteApi.last_success_utc}`;
+  }
+  setText('landing-detail', landingDetail);
+  landingCard.title = [remoteApi.endpoint_url, statusReason]
+    .filter(Boolean).join('\n');
   setText('power-mode', power.safe_mode ? `Safe mode · ${power.reason}` : 'Normal power mode');
   setText('safe-mode-label', power.safe_mode ? 'SAFE MODE' : 'NORMAL');
   setText('drowsiness-model', models.drowsiness || '—');

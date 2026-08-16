@@ -112,6 +112,13 @@ class SafeemaxDeviceClient:
         self.rejected = 0
         self.queue_overflow = 0
         self.last_error = ""
+        self.last_attempt_utc: str | None = None
+        self.last_success_utc: str | None = None
+        self.last_failure_utc: str | None = None
+        self.last_http_status: int | None = None
+        self.last_message_id: str | None = None
+        self.last_message_type: str | None = None
+        self.last_failure_permanent = False
         self._attempts: dict[Path, int] = {}
         self._recover_partials()
         self._load_pending()
@@ -423,6 +430,9 @@ class SafeemaxDeviceClient:
         self._attempts.pop(bundle, None)
         self.rejected += 1
         self.last_error = str(error)
+        self.last_failure_utc = _utc_now()
+        self.last_http_status = None
+        self.last_failure_permanent = True
         self.telemetry.emit(
             "SafeemaxAPI",
             "message_rejected",
@@ -448,6 +458,7 @@ class SafeemaxDeviceClient:
             try:
                 if not bundle.is_dir():
                     continue
+                self.last_attempt_utc = _utc_now()
                 result, message = self._post_bundle(bundle)
                 shutil.rmtree(bundle)
                 self._attempts.pop(bundle, None)
@@ -455,6 +466,11 @@ class SafeemaxDeviceClient:
                 if result.duplicate:
                     self.duplicates += 1
                 self.last_error = ""
+                self.last_success_utc = _utc_now()
+                self.last_http_status = result.status
+                self.last_message_id = str(message["id"])
+                self.last_message_type = str(message["type"])
+                self.last_failure_permanent = False
                 self.telemetry.emit(
                     "SafeemaxAPI",
                     "message_delivered",
@@ -472,6 +488,9 @@ class SafeemaxDeviceClient:
                 self._attempts[bundle] = attempt
                 self.retries += 1
                 self.last_error = str(exc)
+                self.last_failure_utc = _utc_now()
+                self.last_http_status = None
+                self.last_failure_permanent = False
                 delay = min(
                     self.retry_max_sec,
                     self.retry_initial_sec * (2 ** min(attempt - 1, 20)),
@@ -502,8 +521,17 @@ class SafeemaxDeviceClient:
             for path in self.outbox_dir.iterdir()
             if path.is_dir() and path != self.rejected_dir and not path.name.startswith(".")
         )
+        if self.last_error and self.last_failure_permanent:
+            connection_status = "REJECTED"
+        elif self.last_error:
+            connection_status = "RETRYING"
+        elif self.last_success_utc:
+            connection_status = "ONLINE"
+        else:
+            connection_status = "CONNECTING"
         return {
             "enabled": True,
+            "connection_status": connection_status,
             "endpoint_url": self.endpoint_url,
             "pending": pending,
             "delivered": self.delivered,
@@ -511,7 +539,14 @@ class SafeemaxDeviceClient:
             "retries": self.retries,
             "rejected": self.rejected,
             "queue_overflow": self.queue_overflow,
+            "status_reason": self.last_error,
             "last_error": self.last_error,
+            "last_attempt_utc": self.last_attempt_utc,
+            "last_success_utc": self.last_success_utc,
+            "last_failure_utc": self.last_failure_utc,
+            "last_http_status": self.last_http_status,
+            "last_message_id": self.last_message_id,
+            "last_message_type": self.last_message_type,
         }
 
     def close(self) -> None:

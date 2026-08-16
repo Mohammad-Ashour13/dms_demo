@@ -125,6 +125,47 @@ def _apply_thread_caps(config: RuntimeConfig) -> None:
         pass
 
 
+def _remote_api_snapshot(config: RuntimeConfig, client, source_kind: str) -> dict:
+    """Expose why remote delivery is inactive as well as live client health."""
+    if client is not None:
+        return client.snapshot()
+
+    api = config.safeemax_api
+    reasons = []
+    if not api.enabled:
+        reasons.append("Disabled in runtime configuration")
+    if not api.device_id.strip() or api.device_id.upper().startswith("REPLACE_"):
+        reasons.append("device ID is not configured")
+    if not api.vehicle.strip() or api.vehicle.upper().startswith("REPLACE_"):
+        reasons.append("vehicle ID is not configured")
+    if config.deployment_mode != "ACTIVE":
+        reasons.append(f"{config.deployment_mode} mode blocks remote delivery")
+    if source_kind != "camera":
+        reasons.append(f"suppressed for {source_kind} input")
+    if not reasons:
+        reasons.append("Sender did not start")
+    reason = "; ".join(reasons)
+    return {
+        "enabled": False,
+        "connection_status": "DISABLED" if not api.enabled else "SUPPRESSED",
+        "endpoint_url": str(api.endpoint_url),
+        "pending": 0,
+        "delivered": 0,
+        "duplicates": 0,
+        "retries": 0,
+        "rejected": 0,
+        "queue_overflow": 0,
+        "status_reason": reason,
+        "last_error": "",
+        "last_attempt_utc": None,
+        "last_success_utc": None,
+        "last_failure_utc": None,
+        "last_http_status": None,
+        "last_message_id": None,
+        "last_message_type": None,
+    }
+
+
 def run(config_path: Path, replay_path: Path | None = None) -> None:
     config = load_config(config_path)
     _apply_thread_caps(config)
@@ -999,10 +1040,8 @@ def run(config_path: Path, replay_path: Path | None = None) -> None:
                         "dropped_preview": dashboard.dropped_preview,
                         "published_preview": dashboard.published_preview,
                     },
-                    remote_api=(
-                        safeemax_client.snapshot()
-                        if safeemax_client is not None
-                        else {"enabled": False}
+                    remote_api=_remote_api_snapshot(
+                        config, safeemax_client, source_kind
                     ),
                 )
                 dashboard.publish_status(status)
@@ -1046,10 +1085,8 @@ def run(config_path: Path, replay_path: Path | None = None) -> None:
                      "stage_latencies": stage_timings.snapshot(),
                      "frame_hub_dropped": frame_hub.dropped_frames if frame_hub else 0,
                      "dashboard_healthy": dashboard.healthy,
-                     "safeemax_api": (
-                         safeemax_client.snapshot()
-                         if safeemax_client is not None
-                         else {"enabled": False}
+                     "safeemax_api": _remote_api_snapshot(
+                         config, safeemax_client, source_kind
                      ),
                      "telemetry_dropped": telemetry.dropped_records},
                     monotonic_sec=packet.monotonic_sec,
