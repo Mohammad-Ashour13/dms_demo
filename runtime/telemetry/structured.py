@@ -29,6 +29,20 @@ def _json_default(value):
 class StructuredTelemetry:
     """Non-blocking JSONL logger plus an in-memory tail for incident export."""
 
+    _NORMAL_MIN_INTERVAL_SEC = {
+        ("Perception", "face_signal"): 5.0,
+        ("Calibration", "status"): 5.0,
+        ("Events", "snapshot"): 5.0,
+        ("Fusion", "decision"): 5.0,
+        ("Fusion", "latency"): 10.0,
+        ("Window", "feature_snapshot"): 5.0,
+        ("Model", "feature_drift"): 5.0,
+        ("Model", "prediction"): 5.0,
+        ("BehaviorDetector", "inference"): 5.0,
+        ("SeatbeltDetector", "inference"): 5.0,
+        ("SeatbeltDetector", "inference_skipped"): 30.0,
+    }
+
     def __init__(
         self,
         log_dir: Path,
@@ -42,6 +56,7 @@ class StructuredTelemetry:
         self.log_dir.mkdir(parents=True, exist_ok=True)
         self.session_id, self.mode = session_id, mode.upper()
         self.path = self.log_dir / (filename or f"{session_id}.jsonl")
+        self.pruned_log_files = self._prune_old_logs(backups) if filename is None else 0
         self.handler = RotatingFileHandler(self.path, maxBytes=rotate_bytes, backupCount=backups, encoding="utf-8")
         self.handler.setFormatter(logging.Formatter("%(message)s"))
         self.logger = logging.getLogger(f"dms.telemetry.{session_id}")
@@ -54,12 +69,58 @@ class StructuredTelemetry:
         self.tail_lock = threading.Lock()
         self.subscribers: list[Callable[[dict[str, Any]], None]] = []
         self.subscriber_lock = threading.Lock()
+        self.throttle_lock = threading.Lock()
+        self.last_emitted: dict[tuple[str, str], float] = {}
         self.dropped_records = 0
         self.worker = threading.Thread(target=self._run, name="telemetry-writer", daemon=True)
         self.worker.start()
 
+    def _prune_old_logs(self, keep: int) -> int:
+        """Bound telemetry across restarts, not only within one session."""
+        candidates = sorted(
+            (
+                path for path in self.log_dir.glob("*.jsonl*")
+                if path.is_file() and not path.is_symlink() and path != self.path
+            ),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+        removed = 0
+        for path in candidates[max(0, int(keep)):]:
+            try:
+                path.unlink()
+                removed += 1
+            except OSError:
+                continue
+        return removed
+
+    def _should_emit(
+        self,
+        stage: str,
+        event: str,
+        payload: dict,
+        monotonic_sec: float,
+        level: str,
+        incident_id,
+    ) -> bool:
+        if self.mode == "DEBUG" or str(level).upper() != "INFO" or incident_id is not None:
+            return True
+        interval = self._NORMAL_MIN_INTERVAL_SEC.get((str(stage), str(event)))
+        if interval is None or bool(payload.get("changed")):
+            return True
+        key = (str(stage), str(event))
+        with self.throttle_lock:
+            previous = self.last_emitted.get(key, float("-inf"))
+            if monotonic_sec - previous < interval:
+                return False
+            self.last_emitted[key] = monotonic_sec
+        return True
+
     def emit(self, stage: str, event: str, payload: dict | None = None, *, monotonic_sec: float | None = None, frame_id=None, window_id=None, incident_id=None, level="INFO") -> None:
         now_mono = time.monotonic() if monotonic_sec is None else monotonic_sec
+        payload = payload or {}
+        if not self._should_emit(stage, event, payload, now_mono, level, incident_id):
+            return
         record = {
             "utc_timestamp": datetime.now(timezone.utc).isoformat(),
             "monotonic_sec": now_mono,
@@ -70,7 +131,7 @@ class StructuredTelemetry:
             "stage": stage,
             "event": event,
             "level": level,
-            "payload": payload or {},
+            "payload": payload,
         }
         try:
             self.queue.put_nowait(record)

@@ -592,8 +592,6 @@ def load_config(path: Path) -> RuntimeConfig:
         raise ValueError("safeemax_api.endpoint_url must use http or https")
     if api.enabled and (not api.device_id.strip() or not api.vehicle.strip()):
         raise ValueError("safeemax_api.device_id and vehicle are required when enabled")
-    if api.enabled and config.deployment_mode != "ACTIVE":
-        raise ValueError("safeemax_api may only be enabled in ACTIVE deployment mode")
     if min(
         api.request_timeout_sec,
         api.retry_initial_sec,

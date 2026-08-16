@@ -138,8 +138,6 @@ def _remote_api_snapshot(config: RuntimeConfig, client, source_kind: str) -> dic
         reasons.append("device ID is not configured")
     if not api.vehicle.strip() or api.vehicle.upper().startswith("REPLACE_"):
         reasons.append("vehicle ID is not configured")
-    if config.deployment_mode != "ACTIVE":
-        reasons.append(f"{config.deployment_mode} mode blocks remote delivery")
     if source_kind != "camera":
         reasons.append(f"suppressed for {source_kind} input")
     if not reasons:

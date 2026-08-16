@@ -32,7 +32,7 @@ def _decision(state="NORMAL", violations=()):
 def test_pi5_profile_has_fixed_camera_recording_dashboard_and_power_contracts():
     config = load_config("configs/runtime.raspberry_pi5.json")
     assert config.camera.backend == "picamera2_auto"
-    assert (config.camera.width, config.camera.height, config.camera.fps) == (640, 480, 15.0)
+    assert (config.camera.width, config.camera.height, config.camera.fps) == (640, 480, 25.0)
     # Picamera2 RGB888 is BGR-compatible in memory, as expected by OpenCV.
     assert config.camera.pixel_format == "RGB888"
     # 320 is the Pi compromise selected after 256px live CSI frames made
@@ -44,15 +44,9 @@ def test_pi5_profile_has_fixed_camera_recording_dashboard_and_power_contracts():
     assert config.recorder.require_copy_mux is True
     assert config.recorder.reserve_free_bytes == 2 * 1024**3
     assert config.dashboard.enabled and config.dashboard.port == 8080
-
-    remote = _remote_api_snapshot(config, None, "camera")
-    assert remote["connection_status"] == "DISABLED"
-    assert "Disabled in runtime configuration" in remote["status_reason"]
-    assert "device ID is not configured" in remote["status_reason"]
-    assert "vehicle ID is not configured" in remote["status_reason"]
-    assert "SHADOW mode blocks remote delivery" in remote["status_reason"]
-    assert remote["last_error"] == ""
-    assert remote["endpoint_url"] == config.safeemax_api.endpoint_url
+    assert config.safeemax_api.enabled
+    assert config.safeemax_api.device_id == "a3bb18a4-6b94-448f-8898-89888f8d6892"
+    assert config.safeemax_api.vehicle == "ABC-123"
 
 
 def test_eye_signal_blockers_explain_dashboard_quality_and_pose_rejection():

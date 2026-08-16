@@ -285,8 +285,11 @@ async function incidents() {
       const duration = incident.duration_sec === null || incident.duration_sec === undefined
         ? '—'
         : esc(Number(incident.duration_sec).toFixed(1) + ' s');
-      return `<tr><td>${esc(value(incident.started_utc, '—'))}</td><td>${esc(value(incident.highest_state, '—'))}</td><td>${esc(triggers)}</td><td>${esc(evidence)}</td><td>${duration}</td><td>${esc(bytes(incident.video_size_bytes))}</td></tr>`;
-    }).join('') : '<tr><td colspan="6">No incidents saved</td></tr>';
+      const recording = incident.video_url
+        ? `<a class="recording-link" href="${esc(incident.video_url)}" target="_blank" rel="noopener">Watch</a>`
+        : '—';
+      return `<tr><td>${esc(value(incident.started_utc, '—'))}</td><td>${esc(value(incident.highest_state, '—'))}</td><td>${esc(triggers)}</td><td>${esc(evidence)}</td><td>${duration}</td><td>${esc(bytes(incident.video_size_bytes))}</td><td>${recording}</td></tr>`;
+    }).join('') : '<tr><td colspan="7">No incidents saved</td></tr>';
   } catch (error) {
     // Keep the last good incident list while the runtime is busy or restarting.
   }
