@@ -110,6 +110,16 @@ def test_pi5_profile_enables_the_seatbelt_classifier_in_shadow_mode():
     assert config.ncnn_num_threads == 2
 
 
+def test_laptop_alarm_profile_enables_the_seatbelt_classifier_in_shadow_mode():
+    config = load_config("configs/runtime.laptop_alarm_demo.json")
+    assert config.seatbelt_detector.enabled
+    assert config.seatbelt_detector.required
+    assert config.seatbelt_detector.shadow_mode
+    assert config.seatbelt_detector.image_size == 224
+    assert config.seatbelt_detector.ncnn_num_threads == 1
+    assert config.telemetry.console_level == "WARNING"
+
+
 def test_preflight_verifies_the_checked_in_seatbelt_source_and_ncnn_artifacts():
     root = Path(__file__).resolve().parents[1]
     config = load_config(root / "configs/runtime.raspberry_pi5.json")
