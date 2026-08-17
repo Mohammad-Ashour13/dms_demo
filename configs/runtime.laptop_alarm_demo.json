@@ -21,7 +21,6 @@
   "telemetry": {
     "log_dir": "logs",
     "mode": "DEBUG",
-    "console_level": "WARNING",
     "rotate_bytes": 20971520,
     "backups": 5,
     "live_status_hz": 2.0

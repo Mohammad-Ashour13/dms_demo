@@ -27,7 +27,7 @@ def _json_default(value):
 
 
 class StructuredTelemetry:
-    """Non-blocking JSONL logger plus an in-memory tail for incident export."""
+    """Non-blocking JSONL logger with opt-in terminal messages."""
 
     def __init__(
         self,
@@ -56,7 +56,7 @@ class StructuredTelemetry:
         self.worker = threading.Thread(target=self._run, name="telemetry-writer", daemon=True)
         self.worker.start()
 
-    def emit(self, stage: str, event: str, payload: dict | None = None, *, monotonic_sec: float | None = None, frame_id=None, window_id=None, incident_id=None, level="INFO") -> None:
+    def emit(self, stage: str, event: str, payload: dict | None = None, *, monotonic_sec: float | None = None, frame_id=None, window_id=None, incident_id=None, level="INFO", terminal_message: str | None = None) -> None:
         now_mono = time.monotonic() if monotonic_sec is None else monotonic_sec
         record = {
             "utc_timestamp": datetime.now(timezone.utc).isoformat(),
@@ -69,6 +69,7 @@ class StructuredTelemetry:
             "event": event,
             "level": level,
             "payload": payload or {},
+            "_terminal_message": terminal_message,
         }
         try:
             self.queue.put_nowait(record)
@@ -81,8 +82,11 @@ class StructuredTelemetry:
             if record is None:
                 self.queue.task_done()
                 break
+            terminal_message = record.pop("_terminal_message", None)
             encoded = json.dumps(record, ensure_ascii=False, default=_json_default, separators=(",", ":"))
             self.logger.info(encoded)
+            if terminal_message:
+                print(terminal_message, flush=True)
             with self.tail_lock:
                 self.tail.append(record)
                 cutoff = record["monotonic_sec"] - 75.0

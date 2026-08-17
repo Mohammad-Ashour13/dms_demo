@@ -346,6 +346,7 @@ class SeatbeltDetector:
                         self.telemetry.emit(
                             "SeatbeltDetector", "shadow_violation", details,
                             monotonic_sec=timestamp, frame_id=frame_id, level="WARNING",
+                            terminal_message="\n | NO_SEATBELT |",
                         )
                     else:
                         self.evidence_bus.publish(
@@ -361,6 +362,7 @@ class SeatbeltDetector:
                         self.telemetry.emit(
                             "SeatbeltDetector", "evidence_published", details,
                             monotonic_sec=timestamp, frame_id=frame_id, level="WARNING",
+                            terminal_message="\n | NO_SEATBELT |",
                         )
             except Exception as exc:
                 with self.lock:

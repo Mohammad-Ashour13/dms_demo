@@ -117,7 +117,6 @@ def test_laptop_alarm_profile_enables_the_seatbelt_classifier_in_shadow_mode():
     assert config.seatbelt_detector.shadow_mode
     assert config.seatbelt_detector.image_size == 224
     assert config.seatbelt_detector.ncnn_num_threads == 1
-    assert config.telemetry.console_level == "WARNING"
 
 
 def test_preflight_verifies_the_checked_in_seatbelt_source_and_ncnn_artifacts():
