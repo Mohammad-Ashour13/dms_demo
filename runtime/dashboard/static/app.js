@@ -129,10 +129,53 @@ function updateBehaviorDetection(behavior, driver) {
   });
 }
 
+function updateSeatbeltDetection(seatbelt, driver) {
+  const chip = $('behavior-seatbelt');
+  const health = String(seatbelt.health || 'DISABLED').toUpperCase();
+  const rawProbability = seatbelt.no_seatbelt_probability;
+  const probability = rawProbability === null || rawProbability === undefined
+    ? NaN
+    : Number(rawProbability);
+  const threshold = Number(seatbelt.no_seatbelt_threshold);
+  const confirmed = new Set([
+    ...(seatbelt.active_violations || []),
+    ...(driver.violations || []),
+  ]).has('SEATBELT_MISSING');
+  const detected = Number.isFinite(probability)
+    && Number.isFinite(threshold)
+    && probability >= threshold;
+  const confidence = Number.isFinite(probability)
+    ? ` ${Math.round(probability * 100)}%`
+    : '';
+
+  if (health === 'DISABLED' || health === 'FAILED') {
+    chip.className = 'behavior-chip unavailable';
+    setText('behavior-seatbelt-state', 'UNAVAILABLE');
+  } else if (confirmed) {
+    chip.className = 'behavior-chip confirmed';
+    setText('behavior-seatbelt-state', `CONFIRMED${confidence}`);
+  } else if (detected) {
+    chip.className = 'behavior-chip detected';
+    setText('behavior-seatbelt-state', `DETECTED${confidence}`);
+  } else if (Number.isFinite(probability)) {
+    chip.className = 'behavior-chip';
+    setText('behavior-seatbelt-state', `CLEAR${confidence}`);
+  } else {
+    chip.className = 'behavior-chip';
+    setText('behavior-seatbelt-state', 'PENDING');
+  }
+
+  chip.title = [
+    seatbelt.shadow_mode ? 'Seatbelt detector is in shadow mode' : '',
+    seatbelt.last_error || '',
+  ].filter(Boolean).join('\n');
+}
+
 function updateStatus(snapshot) {
   const runtime = snapshot.runtime || {};
   const driver = snapshot.driver || {};
   const behavior = snapshot.behavior || {};
+  const seatbelt = snapshot.seatbelt || {};
   const camera = snapshot.camera || {};
   const perf = snapshot.performance || {};
   const system = snapshot.system || {};
@@ -168,6 +211,7 @@ function updateStatus(snapshot) {
 
   updateFaceOverlay(driver);
   updateBehaviorDetection(behavior, driver);
+  updateSeatbeltDetection(seatbelt, driver);
   setText('blink-rate', String(Number(driver.blink_count_60s || 0).toFixed(0)));
   const eyeEar = Number(driver.event_relative_ear);
   const calibration = driver.calibration || {};

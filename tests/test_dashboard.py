@@ -32,6 +32,13 @@ def test_dashboard_read_only_health_status_and_incident_apis(tmp_path):
         "schema_version": "dashboard-status-v1",
         "updated_monotonic_sec": time.monotonic(),
         "runtime": {"status": "RUNNING"},
+        "seatbelt": {
+            "health": "READY",
+            "no_seatbelt_probability": 0.91,
+            "no_seatbelt_threshold": 0.80,
+            "active_violations": ["SEATBELT_MISSING"],
+            "shadow_mode": True,
+        },
     }
     clients = mp.Value("i", 0)
     app = create_app(
@@ -52,7 +59,9 @@ def test_dashboard_read_only_health_status_and_incident_apis(tmp_path):
             assert (await health.json())["healthy"] is True
             status = await client.get("/api/v1/status")
             assert status.headers["Cache-Control"].startswith("no-store")
-            assert (await status.json())["schema_version"] == "dashboard-status-v1"
+            status_payload = await status.json()
+            assert status_payload["schema_version"] == "dashboard-status-v1"
+            assert status_payload["seatbelt"]["no_seatbelt_probability"] == 0.91
             home = await client.get("/")
             assert home.headers["Cache-Control"].startswith("no-store")
             home_text = await home.text()
@@ -64,6 +73,8 @@ def test_dashboard_read_only_health_status_and_incident_apis(tmp_path):
             assert 'id="behavior-phone"' in home_text
             assert 'id="behavior-smoking"' in home_text
             assert 'id="behavior-eating"' in home_text
+            assert 'id="behavior-seatbelt"' in home_text
+            assert 'id="behavior-seatbelt-state"' in home_text
             assert 'id="landing-card"' in home_text
             assert 'id="landing-state"' in home_text
             script = await client.get("/static/app.js")
@@ -72,6 +83,9 @@ def test_dashboard_read_only_health_status_and_incident_apis(tmp_path):
             assert "face_bbox_normalized" in script_text
             assert "bbox_normalized" in script_text
             assert "class_thresholds" in script_text
+            assert "no_seatbelt_probability" in script_text
+            assert "no_seatbelt_threshold" in script_text
+            assert "SEATBELT_MISSING" in script_text
             assert "'RAW'" in script_text
             assert "event_relative_ear" in script_text
             assert "eye_signal_blockers" in script_text

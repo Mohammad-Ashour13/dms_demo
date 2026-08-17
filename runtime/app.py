@@ -1030,7 +1030,13 @@ def run(config_path: Path, replay_path: Path | None = None) -> None:
                         "hub_dropped_frames": frame_hub.dropped_frames if frame_hub else 0,
                         "encoder": "ffmpeg_mjpeg_copy" if recorder else "disabled",
                     },
-                    seatbelt=seatbelt_snapshot.to_dict(),
+                    seatbelt={
+                        **seatbelt_snapshot.to_dict(),
+                        "no_seatbelt_threshold": (
+                            config.seatbelt_detector.no_seatbelt_threshold
+                        ),
+                        "clear_threshold": config.seatbelt_detector.clear_threshold,
+                    },
                     dashboard={
                         "healthy": dashboard.healthy,
                         "clients": dashboard.active_clients,
