@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 460 130" role="img" aria-labelledby="title">
+  <title id="title">Safee Tracking System</title>
+  <rect width="460" height="130" rx="12" fill="#fff"/>
+  <g transform="translate(14 18)">
+    <text x="0" y="67" font-family="Arial Black,Arial,sans-serif" font-size="70" font-weight="900" letter-spacing="5" fill="#414142">S</text>
+    <path d="M82 68 153 0v96l-27-27z" fill="#48bf78"/>
+    <path d="m126 69 27-69v96z" fill="#25965a"/>
+    <text x="163" y="67" font-family="Arial Black,Arial,sans-serif" font-size="70" font-weight="900" letter-spacing="5" fill="#414142">FEE</text>
+    <rect x="181" y="37" width="36" height="13" rx="2" fill="#48bf78"/>
+    <text x="164" y="96" font-family="Arial,sans-serif" font-size="16" letter-spacing="7" fill="#aaa">TRACKING SYSTEM</text>
+  </g>
+</svg>

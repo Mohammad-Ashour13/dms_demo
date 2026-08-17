@@ -68,6 +68,27 @@
       "drink_or_food": "EATING"
     }
   },
+  "seatbelt_detector": {
+    "enabled": true,
+    "required": true,
+    "model_path": "models/seatbelt/risef_yolov11s",
+    "manifest_path": "models/seatbelt/risef_yolov11s/model_manifest.json",
+    "image_size": 224,
+    "ncnn_num_threads": 1,
+    "inference_interval_sec": 2.0,
+    "queue_size": 1,
+    "no_seatbelt_threshold": 0.80,
+    "clear_threshold": 0.60,
+    "activation_persistence_sec": 4.0,
+    "clear_persistence_sec": 4.0,
+    "evidence_refresh_sec": 2.0,
+    "evidence_ttl_sec": 4.5,
+    "roi_width_scale": 2.8,
+    "roi_height_scale": 3.1,
+    "roi_top_offset": -0.15,
+    "roi_min_size": 128,
+    "shadow_mode": true
+  },
   "alarm": {
     "enabled": true,
     "mode": "LOCAL",

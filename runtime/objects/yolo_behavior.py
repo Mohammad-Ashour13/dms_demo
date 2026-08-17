@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import multiprocessing as mp
+import platform
 import queue
 import threading
 import time
@@ -22,6 +23,12 @@ from dms_final_system.shared.contracts import (
 )
 
 
+# NCNN inference releases Python execution into native worker threads.  The
+# primary YOLO detector and the low-rate seat-belt classifier share this gate
+# so they do not oversubscribe a Raspberry Pi while both are enabled.
+NCNN_INFERENCE_LOCK = threading.Lock()
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -30,8 +37,253 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def resolve_yolo_backend(model_path: str | Path, backend: str = "auto") -> str:
+    """Resolve configured/backend-auto values to runtime backend names."""
+    configured = str(backend).lower()
+    if configured == "ultralytics":
+        return "pytorch"
+    if configured in {"ncnn", "onnx", "pytorch"}:
+        return configured
+    if configured != "auto":
+        raise ValueError(f"Unsupported behavior detector backend: {backend}")
+    path = Path(model_path)
+    name = path.name.lower()
+    suffix = path.suffix.lower()
+    if name.endswith("_ncnn_model") or path.is_dir():
+        return "ncnn"
+    if suffix == ".onnx":
+        return "onnx"
+    if suffix == ".pt":
+        return "pytorch"
+    raise ValueError(
+        "Could not infer behavior detector backend from model path "
+        f"{model_path!s}; set behavior_detector.backend explicitly"
+    )
+
+
+def resolve_execution_mode(resolved_backend: str, execution_mode: str = "auto") -> str:
+    configured = str(execution_mode).lower()
+    if configured in {"process", "thread"}:
+        return configured
+    if configured != "auto":
+        raise ValueError(f"Unsupported behavior detector execution_mode: {execution_mode}")
+    return "process" if str(resolved_backend).lower() == "pytorch" else "thread"
+
+
+def _is_arm_platform() -> bool:
+    machine = platform.machine().lower()
+    return machine.startswith("arm") or machine in {"aarch64", "arm64"}
+
+
+def _read_json_if_present(path: Path) -> dict[str, Any]:
+    if not path.is_file():
+        return {}
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _read_ncnn_export_image_size(model_path: Path) -> int | None:
+    candidates = (
+        model_path / "ncnn_export_manifest.json",
+        model_path / "metadata.json",
+        model_path / "metadata.yaml",
+    )
+    for candidate in candidates:
+        if not candidate.is_file():
+            continue
+        if candidate.suffix.lower() == ".json":
+            payload = _read_json_if_present(candidate)
+            value = payload.get("imgsz") or payload.get("image_size")
+            if isinstance(value, list):
+                value = value[0] if value else None
+            return int(value) if value is not None else None
+        text = candidate.read_text(encoding="utf-8")
+        for key in ("imgsz", "image_size"):
+            for line in text.splitlines():
+                if line.strip().startswith(f"{key}:"):
+                    value = line.split(":", 1)[1].strip().strip("'\"")
+                    if value.startswith("["):
+                        value = value.strip("[]").split(",", 1)[0].strip()
+                    return int(float(value))
+    return None
+
+
+def _find_ncnn_files(model_path: Path) -> tuple[Path, Path]:
+    params = sorted(model_path.glob("*.param"))
+    bins = sorted(model_path.glob("*.bin"))
+    if not params or not bins:
+        raise FileNotFoundError(
+            f"NCNN model directory must contain .param and .bin files: {model_path}"
+        )
+    return params[0], bins[0]
+
+
+def _parse_ncnn_blob_names(param_path: Path) -> tuple[str, str]:
+    lines = [
+        line.strip()
+        for line in param_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    input_names: list[str] = []
+    tops: list[str] = []
+    bottoms: set[str] = set()
+    for line in lines[2:]:
+        parts = line.split()
+        if len(parts) < 4:
+            continue
+        layer_type = parts[0]
+        try:
+            input_count = int(parts[2])
+            output_count = int(parts[3])
+        except ValueError:
+            continue
+        cursor = 4
+        layer_bottoms = parts[cursor:cursor + input_count]
+        cursor += input_count
+        layer_tops = parts[cursor:cursor + output_count]
+        bottoms.update(layer_bottoms)
+        tops.extend(layer_tops)
+        if layer_type.lower() == "input":
+            input_names.extend(layer_tops)
+    output_names = [name for name in tops if name not in bottoms]
+    if not input_names or not output_names:
+        raise RuntimeError(f"Could not infer NCNN input/output blob names from {param_path}")
+    return input_names[0], output_names[-1]
+
+
+def _letterbox(frame: np.ndarray, image_size: int) -> tuple[np.ndarray, float, float, float]:
+    height, width = frame.shape[:2]
+    size = int(image_size)
+    scale = min(size / max(height, 1), size / max(width, 1))
+    resized_width = max(1, int(round(width * scale)))
+    resized_height = max(1, int(round(height * scale)))
+    try:
+        import cv2
+    except ImportError as exc:
+        raise RuntimeError("OpenCV is required for YOLO preprocessing") from exc
+    resized = cv2.resize(frame, (resized_width, resized_height), interpolation=cv2.INTER_LINEAR)
+    canvas = np.full((size, size, 3), 114, dtype=np.uint8)
+    pad_x = (size - resized_width) / 2.0
+    pad_y = (size - resized_height) / 2.0
+    left = int(round(pad_x - 0.1))
+    top = int(round(pad_y - 0.1))
+    canvas[top:top + resized_height, left:left + resized_width] = resized
+    return canvas, scale, float(left), float(top)
+
+
+def _clip_boxes(boxes: np.ndarray, width: int, height: int) -> np.ndarray:
+    boxes[:, [0, 2]] = np.clip(boxes[:, [0, 2]], 0, width)
+    boxes[:, [1, 3]] = np.clip(boxes[:, [1, 3]], 0, height)
+    return boxes
+
+
+def _box_iou(box: np.ndarray, boxes: np.ndarray) -> np.ndarray:
+    x1 = np.maximum(box[0], boxes[:, 0])
+    y1 = np.maximum(box[1], boxes[:, 1])
+    x2 = np.minimum(box[2], boxes[:, 2])
+    y2 = np.minimum(box[3], boxes[:, 3])
+    intersection = np.maximum(0.0, x2 - x1) * np.maximum(0.0, y2 - y1)
+    box_area = max(0.0, float((box[2] - box[0]) * (box[3] - box[1])))
+    areas = np.maximum(0.0, boxes[:, 2] - boxes[:, 0]) * np.maximum(0.0, boxes[:, 3] - boxes[:, 1])
+    return intersection / np.maximum(box_area + areas - intersection, 1e-9)
+
+
+def _nms(boxes: np.ndarray, scores: np.ndarray, iou_threshold: float) -> list[int]:
+    if len(boxes) == 0:
+        return []
+    order = np.argsort(scores)[::-1]
+    keep: list[int] = []
+    while len(order):
+        current = int(order[0])
+        keep.append(current)
+        if len(order) == 1:
+            break
+        ious = _box_iou(boxes[current], boxes[order[1:]])
+        order = order[1:][ious <= float(iou_threshold)]
+    return keep
+
+
+def _postprocess_yolo_output(
+    output: Any,
+    *,
+    image_size: int,
+    scale: float,
+    pad_x: float,
+    pad_y: float,
+    original_width: int,
+    original_height: int,
+    names: dict[int, str],
+    confidence: float,
+    iou: float,
+) -> list[ObjectDetection]:
+    array = np.asarray(output, dtype=np.float32)
+    if array.ndim == 3 and array.shape[0] == 1:
+        array = array[0]
+    if array.ndim != 2 or not array.size:
+        return []
+    class_count = len(names)
+    if array.shape[0] in {class_count + 4, class_count + 5, class_count + 6} and array.shape[1] > array.shape[0]:
+        array = array.T
+
+    boxes: np.ndarray
+    scores: np.ndarray
+    class_ids: np.ndarray
+    if array.shape[1] == 6:
+        first_tail, second_tail = array[:, 4], array[:, 5]
+        if np.nanmax(first_tail) <= 1.0:
+            scores = first_tail
+            class_ids = second_tail.astype(int)
+        elif np.nanmax(second_tail) <= 1.0:
+            class_ids = first_tail.astype(int)
+            scores = second_tail
+        else:
+            scores = first_tail
+            class_ids = second_tail.astype(int)
+        boxes = array[:, :4].copy()
+    elif array.shape[1] >= class_count + 4:
+        raw_boxes = array[:, :4]
+        if array.shape[1] >= class_count + 5 and np.nanmax(array[:, 4]) <= 1.0:
+            class_scores = array[:, 5:5 + class_count] * array[:, 4:5]
+        else:
+            class_scores = array[:, 4:4 + class_count]
+        class_ids = np.argmax(class_scores, axis=1).astype(int)
+        scores = class_scores[np.arange(len(class_scores)), class_ids]
+        cx, cy, width, height = raw_boxes.T
+        boxes = np.column_stack(
+            (cx - width / 2.0, cy - height / 2.0, cx + width / 2.0, cy + height / 2.0)
+        )
+    else:
+        return []
+
+    valid = np.isfinite(scores) & (scores >= float(confidence))
+    valid &= np.isfinite(boxes).all(axis=1)
+    if not np.any(valid):
+        return []
+    boxes, scores, class_ids = boxes[valid], scores[valid], class_ids[valid]
+    boxes[:, [0, 2]] = (boxes[:, [0, 2]] - pad_x) / max(scale, 1e-9)
+    boxes[:, [1, 3]] = (boxes[:, [1, 3]] - pad_y) / max(scale, 1e-9)
+    boxes = _clip_boxes(boxes, original_width, original_height)
+    sizes = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
+    valid = sizes > 1.0
+    boxes, scores, class_ids = boxes[valid], scores[valid], class_ids[valid]
+    keep = _nms(boxes, scores, float(iou))
+    detections: list[ObjectDetection] = []
+    for index in keep:
+        class_id = int(class_ids[index])
+        if class_id not in names:
+            continue
+        detections.append(
+            ObjectDetection(
+                class_id,
+                names[class_id],
+                float(scores[index]),
+                tuple(float(value) for value in boxes[index]),
+            )
+        )
+    return detections
+
+
 class UltralyticsYoloBackend:
-    """Thin wrapper supporting both a YOLO `.pt` file and an exported NCNN directory."""
+    """Thin wrapper around the PyTorch/Ultralytics YOLO runtime."""
 
     def __init__(self, model_path: Path, device="cpu"):
         try:
@@ -78,10 +330,195 @@ class UltralyticsYoloBackend:
         return detections
 
 
-def _isolated_yolo_main(model_path, device, requests, responses) -> None:
-    """Own all PyTorch/Ultralytics native state inside a spawned process."""
+class NcnnYoloBackend:
+    """NCNN runtime for an Ultralytics-exported YOLO detect model."""
+
+    def __init__(
+        self,
+        model_path: Path,
+        class_names: list[str],
+        *,
+        image_size: int,
+        num_threads: int = 3,
+    ):
+        model_path = Path(model_path)
+        if not model_path.is_dir():
+            raise FileNotFoundError(f"NCNN model path must be an export directory: {model_path}")
+        exported_size = _read_ncnn_export_image_size(model_path)
+        if exported_size is None:
+            raise RuntimeError(
+                "NCNN export image size could not be verified. Re-export with "
+                "runtime.objects.export_ncnn so ncnn_export_manifest.json is written."
+            )
+        if int(exported_size) != int(image_size):
+            raise RuntimeError(
+                "NCNN image_size mismatch: "
+                f"config.behavior_detector.image_size={int(image_size)} but export imgsz={int(exported_size)}. "
+                "Re-export NCNN with the configured image_size or update the config."
+            )
+        try:
+            import ncnn
+        except ImportError as exc:
+            raise RuntimeError(
+                "NCNN behavior detection requires the ncnn Python package. "
+                "Install requirements-raspberry.txt."
+            ) from exc
+        self.ncnn = ncnn
+        self.model_path = model_path
+        self.image_size = int(image_size)
+        self.names = {index: str(name) for index, name in enumerate(class_names)}
+        param_path, bin_path = _find_ncnn_files(model_path)
+        self.input_name, self.output_name = _parse_ncnn_blob_names(param_path)
+        self.net = ncnn.Net()
+        try:
+            self.net.opt.num_threads = int(num_threads)
+            self.net.opt.use_vulkan_compute = False
+        except AttributeError:
+            pass
+        status = self.net.load_param(str(param_path))
+        if status not in {0, None}:
+            raise RuntimeError(f"Failed to load NCNN param file: {param_path}")
+        status = self.net.load_model(str(bin_path))
+        if status not in {0, None}:
+            raise RuntimeError(f"Failed to load NCNN bin file: {bin_path}")
+
+    def predict(self, frame: np.ndarray, *, image_size: int, confidence: float, iou: float):
+        if int(image_size) != self.image_size:
+            raise RuntimeError(
+                "NCNN image_size mismatch during inference: "
+                f"configured={int(image_size)} export={self.image_size}"
+            )
+        original_height, original_width = frame.shape[:2]
+        letterboxed, scale, pad_x, pad_y = _letterbox(frame, self.image_size)
+        try:
+            import cv2
+        except ImportError as exc:
+            raise RuntimeError("OpenCV is required for NCNN preprocessing") from exc
+        rgb = cv2.cvtColor(letterboxed, cv2.COLOR_BGR2RGB)
+        mat = self.ncnn.Mat.from_pixels(
+            rgb,
+            self.ncnn.Mat.PixelType.PIXEL_RGB,
+            self.image_size,
+            self.image_size,
+        )
+        mat.substract_mean_normalize([], [1 / 255.0, 1 / 255.0, 1 / 255.0])
+        with NCNN_INFERENCE_LOCK:
+            extractor = self.net.create_extractor()
+            extractor.input(self.input_name, mat)
+            result = extractor.extract(self.output_name)
+        if isinstance(result, tuple):
+            if result[0] != 0:
+                raise RuntimeError(f"NCNN inference failed with status {result[0]}")
+            output = result[1]
+        else:
+            output = result
+        return _postprocess_yolo_output(
+            output,
+            image_size=self.image_size,
+            scale=scale,
+            pad_x=pad_x,
+            pad_y=pad_y,
+            original_width=original_width,
+            original_height=original_height,
+            names=self.names,
+            confidence=confidence,
+            iou=iou,
+        )
+
+
+class OnnxYoloBackend:
+    """Optional ONNX Runtime backend using the same YOLO preprocessing contract."""
+
+    def __init__(
+        self,
+        model_path: Path,
+        class_names: list[str],
+        *,
+        image_size: int,
+        num_threads: int = 3,
+    ):
+        try:
+            import onnxruntime as ort
+        except ImportError as exc:
+            raise RuntimeError(
+                "ONNX behavior detection requires onnxruntime. Install it or use NCNN/PyTorch."
+            ) from exc
+        model_path = Path(model_path)
+        if not model_path.is_file():
+            raise FileNotFoundError(f"ONNX model not found: {model_path}")
+        self.model_path = model_path
+        self.image_size = int(image_size)
+        self.names = {index: str(name) for index, name in enumerate(class_names)}
+        options = ort.SessionOptions()
+        options.intra_op_num_threads = int(num_threads)
+        options.inter_op_num_threads = 1
+        self.session = ort.InferenceSession(
+            str(model_path), sess_options=options, providers=["CPUExecutionProvider"]
+        )
+        self.input_name = self.session.get_inputs()[0].name
+
+    def predict(self, frame: np.ndarray, *, image_size: int, confidence: float, iou: float):
+        if int(image_size) != self.image_size:
+            raise RuntimeError(
+                f"ONNX image_size mismatch during inference: configured={int(image_size)} expected={self.image_size}"
+            )
+        original_height, original_width = frame.shape[:2]
+        letterboxed, scale, pad_x, pad_y = _letterbox(frame, self.image_size)
+        try:
+            import cv2
+        except ImportError as exc:
+            raise RuntimeError("OpenCV is required for ONNX preprocessing") from exc
+        rgb = cv2.cvtColor(letterboxed, cv2.COLOR_BGR2RGB)
+        tensor = np.transpose(rgb.astype(np.float32) / 255.0, (2, 0, 1))[None, ...]
+        outputs = self.session.run(None, {self.input_name: tensor})
+        return _postprocess_yolo_output(
+            outputs[0],
+            image_size=self.image_size,
+            scale=scale,
+            pad_x=pad_x,
+            pad_y=pad_y,
+            original_width=original_width,
+            original_height=original_height,
+            names=self.names,
+            confidence=confidence,
+            iou=iou,
+        )
+
+
+def _build_yolo_backend(
+    backend_name: str,
+    model_path: Path,
+    device: str,
+    class_names: list[str],
+    image_size: int,
+    ncnn_num_threads: int,
+):
+    if backend_name == "pytorch":
+        return UltralyticsYoloBackend(model_path, device)
+    if backend_name == "ncnn":
+        return NcnnYoloBackend(
+            model_path, class_names, image_size=image_size, num_threads=ncnn_num_threads
+        )
+    if backend_name == "onnx":
+        return OnnxYoloBackend(
+            model_path, class_names, image_size=image_size, num_threads=ncnn_num_threads
+        )
+    raise ValueError(f"Unsupported behavior detector backend: {backend_name}")
+
+
+def _isolated_yolo_main(
+    model_path, device, backend_name, class_names, image_size, ncnn_num_threads, requests, responses
+) -> None:
+    """Own native detector state inside a spawned process when isolation is requested."""
     try:
-        backend = UltralyticsYoloBackend(Path(model_path), device)
+        backend = _build_yolo_backend(
+            str(backend_name),
+            Path(model_path),
+            str(device),
+            list(class_names or []),
+            int(image_size),
+            int(ncnn_num_threads),
+        )
         responses.put(("READY", backend.names))
     except BaseException as exc:
         responses.put(("STARTUP_ERROR", repr(exc)))
@@ -124,16 +561,37 @@ class ProcessIsolatedYoloBackend:
     own native CPU runtime.  Some Linux driver/library combinations terminate
     the interpreter during the first inference.  A spawned process has a clean
     native runtime; if it fails, the parent reports the detector as failed while
-    camera, drowsiness inference, Fusion and recording continue to operate.
+    camera, drowsiness inference, Fusion and recording continue to operate.  The
+    same proxy remains available for non-PyTorch backends when explicit process
+    isolation is requested.
     """
 
-    def __init__(self, model_path: Path, device="cpu", startup_timeout_sec=45.0):
+    def __init__(
+        self,
+        model_path: Path,
+        device="cpu",
+        startup_timeout_sec=45.0,
+        *,
+        backend_name="pytorch",
+        class_names: list[str] | None = None,
+        image_size: int = 640,
+        ncnn_num_threads: int = 3,
+    ):
         self.context = mp.get_context("spawn")
         self.requests = self.context.Queue(maxsize=1)
         self.responses = self.context.Queue(maxsize=1)
         self.process = self.context.Process(
             target=_isolated_yolo_main,
-            args=(str(model_path), str(device), self.requests, self.responses),
+            args=(
+                str(model_path),
+                str(device),
+                str(backend_name),
+                list(class_names or []),
+                int(image_size),
+                int(ncnn_num_threads),
+                self.requests,
+                self.responses,
+            ),
             name="isolated-yolo-runtime",
             daemon=True,
         )
@@ -322,7 +780,9 @@ class YoloBehaviorDetector:
         self.evidence_bus = evidence_bus
         self.telemetry = telemetry
         self.enabled = bool(config.enabled)
-        self.queue: queue.Queue[tuple[int, float, np.ndarray] | None] = queue.Queue(
+        self.queue: queue.Queue[
+            tuple[int, float, np.ndarray, tuple[float, float, float, float] | None] | None
+        ] = queue.Queue(
             maxsize=max(1, int(config.queue_size))
         )
         self.stop_event = threading.Event()
@@ -333,6 +793,15 @@ class YoloBehaviorDetector:
         self.backend = None
         self.model_version = "disabled"
         self.backend_name = "disabled"
+        self.resolved_backend = "disabled"
+        self.execution_mode = "disabled"
+        self.base_interval_sec = float(config.inference_interval_sec)
+        self.effective_interval_sec = self.base_interval_sec
+        self.safe_mode_enabled = False
+        self.safe_mode_interval_sec = self.base_interval_sec
+        self.last_context_roi = float("-inf")
+        self.context_hold_until = float("-inf")
+        self.last_crop_info: dict[str, Any] = {}
         self.snapshot_value = BehaviorDetectorSnapshot(
             0.0, -1, self.model_version, self.backend_name, [], [], {}, 0.0,
             health="DISABLED",
@@ -352,20 +821,53 @@ class YoloBehaviorDetector:
                     raise RuntimeError(
                         f"YOLO model checksum mismatch: expected={manifest['sha256']} actual={actual}"
                     )
+            class_names = [str(value) for value in manifest.get("source_classes", [])]
+            self.resolved_backend = resolve_yolo_backend(model_path, config.backend)
             if backend is not None:
                 self.backend = backend
                 execution_mode = "injected"
-            elif config.execution_mode == "process":
-                self.backend = ProcessIsolatedYoloBackend(model_path, config.device)
-                execution_mode = "process"
+                self.resolved_backend = "injected"
             else:
-                self.backend = UltralyticsYoloBackend(model_path, config.device)
-                execution_mode = "thread"
+                execution_mode = resolve_execution_mode(
+                    self.resolved_backend, config.execution_mode
+                )
+                if self.resolved_backend == "pytorch" and _is_arm_platform():
+                    self.telemetry.emit(
+                        "BehaviorDetector",
+                        "pytorch_backend_on_arm",
+                        {
+                            "model_path": str(model_path),
+                            "message": (
+                                "PyTorch/Ultralytics behavior backend is heavy on ARM; "
+                                "use an NCNN export for Raspberry Pi 4."
+                            ),
+                        },
+                        level="WARNING",
+                    )
+                if execution_mode == "process":
+                    self.backend = ProcessIsolatedYoloBackend(
+                        model_path,
+                        config.device,
+                        backend_name=self.resolved_backend,
+                        class_names=class_names,
+                        image_size=config.image_size,
+                        ncnn_num_threads=config.ncnn_num_threads,
+                    )
+                else:
+                    self.backend = _build_yolo_backend(
+                        self.resolved_backend,
+                        model_path,
+                        config.device,
+                        class_names,
+                        config.image_size,
+                        config.ncnn_num_threads,
+                    )
+            self.execution_mode = execution_mode
             names = {str(value) for value in getattr(self.backend, "names", {}).values()}
             missing = sorted(self.REQUIRED_SOURCE_CLASSES - names)
             if missing:
                 raise RuntimeError(f"YOLO model is missing required classes: {missing}; names={sorted(names)}")
-            self.backend_name = f"{config.backend}:{execution_mode}"
+            self.backend_name = f"{self.resolved_backend}:{execution_mode}"
             self.filter = TemporalBehaviorFilter(
                 config.class_mapping,
                 config.class_thresholds,
@@ -392,10 +894,11 @@ class YoloBehaviorDetector:
                 {
                     "model_version": self.model_version,
                     "backend": self.backend_name,
+                    "resolved_backend": self.resolved_backend,
                     "execution_mode": execution_mode,
                     "model_path": str(model_path),
                     "classes": sorted(names),
-                    "interval_sec": config.inference_interval_sec,
+                    "interval_sec": self.effective_interval_sec,
                 },
             )
         except Exception as exc:
@@ -408,13 +911,17 @@ class YoloBehaviorDetector:
                 raise
             self.enabled = False
 
-    def submit(self, packet: FramePacket) -> None:
+    def submit(
+        self,
+        packet: FramePacket,
+        face_bbox_xyxy: tuple[float, float, float, float] | None = None,
+    ) -> None:
         if not self.enabled or self.worker is None:
             return
-        if packet.monotonic_sec - self.last_submitted < self.config.inference_interval_sec:
+        if packet.monotonic_sec - self.last_submitted < self.effective_interval_sec:
             return
         self.last_submitted = packet.monotonic_sec
-        item = (packet.frame_id, packet.monotonic_sec, packet.frame.copy())
+        item = (packet.frame_id, packet.monotonic_sec, packet.frame.copy(), face_bbox_xyxy)
         try:
             self.queue.put_nowait(item)
         except queue.Full:
@@ -429,12 +936,157 @@ class YoloBehaviorDetector:
             except queue.Full:
                 self.dropped_frames += 1
 
-    def _crop(self, frame: np.ndarray):
+    def set_safe_mode(self, enabled: bool, interval_sec: float | None = None) -> None:
+        enabled = bool(enabled)
+        previous = self.safe_mode_enabled
+        self.safe_mode_enabled = enabled
+        if interval_sec is not None:
+            maximum = float(self.config.max_inference_interval_sec)
+            self.safe_mode_interval_sec = min(maximum, max(self.base_interval_sec, float(interval_sec)))
+        self.effective_interval_sec = (
+            self.safe_mode_interval_sec if enabled else self.base_interval_sec
+        )
+        if enabled != previous:
+            self.telemetry.emit(
+                "BehaviorDetector",
+                "safe_mode_changed",
+                {
+                    "enabled": enabled,
+                    "effective_interval_sec": self.effective_interval_sec,
+                },
+            )
+
+    def _static_crop(self, frame: np.ndarray):
         height, width = frame.shape[:2]
         x1, y1, x2, y2 = self.config.driver_roi
         px1, py1 = int(round(x1 * width)), int(round(y1 * height))
         px2, py2 = int(round(x2 * width)), int(round(y2 * height))
-        return frame[py1:py2, px1:px2], px1, py1
+        return frame[py1:py2, px1:px2], px1, py1, {
+            "mode": "static",
+            "crop_xyxy": [px1, py1, px2, py2],
+            "crop_width": max(0, px2 - px1),
+            "crop_height": max(0, py2 - py1),
+        }
+
+    def _full_crop(self, frame: np.ndarray, reason: str | None = None):
+        height, width = frame.shape[:2]
+        info = {
+            "mode": "full",
+            "crop_xyxy": [0, 0, width, height],
+            "crop_width": width,
+            "crop_height": height,
+        }
+        if reason:
+            info["reason"] = reason
+        return frame, 0, 0, info
+
+    def _face_crop(
+        self,
+        frame: np.ndarray,
+        face_bbox_xyxy: tuple[float, float, float, float] | None,
+    ):
+        height, width = frame.shape[:2]
+        if face_bbox_xyxy is None:
+            if self.config.roi_fallback_static_on_no_face:
+                crop, x, y, info = self._static_crop(frame)
+                info["mode"] = "static"
+                info["fallback_reason"] = "no_face"
+                return crop, x, y, info
+            return self._full_crop(frame, "no_face")
+        x1, y1, x2, y2 = (float(value) for value in face_bbox_xyxy)
+        x1, x2 = sorted((x1, x2))
+        y1, y2 = sorted((y1, y2))
+        x1, x2 = np.clip([x1, x2], 0.0, float(width))
+        y1, y2 = np.clip([y1, y2], 0.0, float(height))
+        face_width, face_height = x2 - x1, y2 - y1
+        if face_width <= 1.0 or face_height <= 1.0:
+            if self.config.roi_fallback_static_on_no_face:
+                crop, x, y, info = self._static_crop(frame)
+                info["mode"] = "static"
+                info["fallback_reason"] = "invalid_face_bbox"
+                return crop, x, y, info
+            return self._full_crop(frame, "invalid_face_bbox")
+
+        side = max(face_width, face_height) * float(self.config.roi_scale)
+        side = max(side, float(self.config.roi_min_size))
+        side = min(side, float(max(width, height)))
+        center_x = (x1 + x2) / 2.0
+        # Bias slightly downward so the crop favors mouth/hand evidence over forehead.
+        center_y = (y1 + y2) / 2.0 + 0.10 * face_height
+        crop_x1 = center_x - side / 2.0
+        crop_y1 = center_y - side / 2.0
+        crop_x2 = crop_x1 + side
+        crop_y2 = crop_y1 + side
+        if crop_x1 < 0:
+            crop_x2 -= crop_x1
+            crop_x1 = 0.0
+        if crop_y1 < 0:
+            crop_y2 -= crop_y1
+            crop_y1 = 0.0
+        if crop_x2 > width:
+            crop_x1 -= crop_x2 - width
+            crop_x2 = float(width)
+        if crop_y2 > height:
+            crop_y1 -= crop_y2 - height
+            crop_y2 = float(height)
+        crop_x1, crop_y1 = max(0.0, crop_x1), max(0.0, crop_y1)
+        crop_x2, crop_y2 = min(float(width), crop_x2), min(float(height), crop_y2)
+        px1, py1 = int(np.floor(crop_x1)), int(np.floor(crop_y1))
+        px2, py2 = int(np.ceil(crop_x2)), int(np.ceil(crop_y2))
+        if px2 <= px1 or py2 <= py1:
+            return self._full_crop(frame, "empty_face_roi")
+        info = {
+            "mode": "face",
+            "crop_xyxy": [px1, py1, px2, py2],
+            "crop_width": px2 - px1,
+            "crop_height": py2 - py1,
+            "face_bbox_xyxy": [x1, y1, x2, y2],
+            "roi_scale": float(self.config.roi_scale),
+        }
+        return frame[py1:py2, px1:px2], px1, py1, info
+
+    def _crop(
+        self,
+        frame: np.ndarray,
+        face_bbox_xyxy: tuple[float, float, float, float] | None = None,
+    ):
+        mode = str(self.config.roi_mode).lower()
+        if mode == "full":
+            return self._full_crop(frame)
+        if mode == "static":
+            return self._static_crop(frame)
+        return self._face_crop(frame, face_bbox_xyxy)
+
+    def _update_effective_interval(self, inference_ms: float, timestamp: float, frame_id: int) -> None:
+        if not self.config.adaptive_interval or self.safe_mode_enabled:
+            return
+        old = float(self.effective_interval_sec)
+        budget = float(self.config.latency_budget_ms)
+        base = float(self.base_interval_sec)
+        maximum = float(self.config.max_inference_interval_sec)
+        if inference_ms > budget:
+            new = min(maximum, max(old * 1.25, old + base * 0.25))
+        elif inference_ms < budget * 0.70 and old > base:
+            new = max(base, min(old * 0.85, old - base * 0.25))
+        else:
+            return
+        if abs(new - old) < 1e-4:
+            return
+        self.effective_interval_sec = float(new)
+        self.telemetry.emit(
+            "BehaviorDetector",
+            "interval_changed",
+            {
+                "previous_interval_sec": old,
+                "effective_interval_sec": self.effective_interval_sec,
+                "base_interval_sec": base,
+                "max_interval_sec": maximum,
+                "latency_budget_ms": budget,
+                "inference_ms": float(inference_ms),
+            },
+            monotonic_sec=timestamp,
+            frame_id=frame_id,
+        )
 
     def _run(self) -> None:
         assert self.backend is not None
@@ -447,10 +1099,30 @@ class YoloBehaviorDetector:
             if item is None:
                 self.queue.task_done()
                 break
-            frame_id, timestamp, frame = item
+            frame_id, timestamp, frame, face_bbox_xyxy = item
             started = time.perf_counter()
             try:
-                crop, offset_x, offset_y = self._crop(frame)
+                context_interval = float(
+                    getattr(self.config, "context_roi_interval_sec", 2.0)
+                )
+                context_due = timestamp - self.last_context_roi >= context_interval
+                context_followup = timestamp <= self.context_hold_until
+                if (
+                    str(self.config.roi_mode).lower() == "face"
+                    and (context_due or context_followup)
+                ):
+                    crop, offset_x, offset_y, crop_info = self._static_crop(frame)
+                    crop_info["mode"] = (
+                        "context_reacquisition" if context_due else "context_followup"
+                    )
+                    crop_info["context_interval_sec"] = context_interval
+                    if context_due:
+                        self.last_context_roi = timestamp
+                else:
+                    crop, offset_x, offset_y, crop_info = self._crop(
+                        frame, face_bbox_xyxy
+                    )
+                self.last_crop_info = dict(crop_info)
                 raw = self.backend.predict(
                     crop,
                     image_size=self.config.image_size,
@@ -473,12 +1145,23 @@ class YoloBehaviorDetector:
                     if detection.label in self.config.class_mapping
                     and detection.confidence >= self.config.class_thresholds[detection.label]
                 ]
+                if (
+                    crop_info.get("mode")
+                    in {"context_reacquisition", "context_followup"}
+                    and detections
+                ):
+                    self.context_hold_until = max(
+                        self.context_hold_until,
+                        timestamp + float(self.config.temporal_window_sec),
+                    )
+                    crop_info["context_hold_until"] = self.context_hold_until
                 active, ratios, events = self.filter.update(
                     timestamp, detections, frame_id=frame_id
                 )
                 for event in events:
                     self.evidence_bus.publish(event)
                 inference_ms = (time.perf_counter() - started) * 1000.0
+                self._update_effective_interval(inference_ms, timestamp, frame_id)
                 snapshot = BehaviorDetectorSnapshot(
                     timestamp,
                     frame_id,
@@ -496,7 +1179,11 @@ class YoloBehaviorDetector:
                 self.telemetry.emit(
                     "BehaviorDetector",
                     "inference",
-                    snapshot.to_dict(),
+                    {
+                        **snapshot.to_dict(),
+                        "roi": crop_info,
+                        "effective_interval_sec": self.effective_interval_sec,
+                    },
                     monotonic_sec=timestamp,
                     frame_id=frame_id,
                     level="WARNING" if active else "INFO",

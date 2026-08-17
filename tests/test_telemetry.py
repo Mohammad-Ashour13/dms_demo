@@ -13,3 +13,16 @@ def test_structured_log_and_incident_export_share_ids(tmp_path):
     records = [json.loads(line) for line in telemetry.path.read_text().splitlines()]
     assert records[0]["session_id"] == "session-1"
     assert records[0]["window_id"] == "w-1"
+
+
+def test_only_explicit_terminal_message_is_echoed(tmp_path, capfd):
+    telemetry = StructuredTelemetry(tmp_path / "logs", "session-1")
+    telemetry.emit("SeatbeltDetector", "inference", level="INFO")
+    telemetry.emit(
+        "SeatbeltDetector", "shadow_violation", level="WARNING",
+        terminal_message="NO_SEATBELT",
+    )
+    telemetry.close()
+
+    terminal = capfd.readouterr().out
+    assert terminal == "NO_SEATBELT\n"

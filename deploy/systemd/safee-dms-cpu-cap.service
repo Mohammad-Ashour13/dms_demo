@@ -1,0 +1,12 @@
+[Unit]
+Description=Apply tested transient Safee Raspberry Pi CPU ceiling
+Before=safee-dms.service
+ConditionPathExists=/etc/default/safee-dms-power
+
+[Service]
+Type=oneshot
+ExecStart=/opt/safee-dms/scripts/apply_cpu_ceiling.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

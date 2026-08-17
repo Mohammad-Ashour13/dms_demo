@@ -1,0 +1,7 @@
+# Drowsiness-model bundle integrity is verified with byte-level SHA-256 hashes.
+# Do not let Git's text conversion alter the exported artifacts on checkout.
+models/drowsiness/*/** -text
+# NCNN exports are byte-hashed at runtime. Keep generated artifacts byte-for-byte
+# identical on every checkout; this also prevents Windows CRLF conversion of .param files.
+models/driver_behavior/** -text
+models/seatbelt/** -text

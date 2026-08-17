@@ -1,0 +1,7 @@
+{
+  "bundle_path": "20260731T140605Z_full_runtimefix1",
+  "model_version": "20260731T140605Z_full_runtimefix1",
+  "bundle_status": "EXPERIMENTAL",
+  "deployment_mode": "SHADOW",
+  "note": "Runtime-compatible derivative; model weights and calibration are unchanged. ACTIVE deployment is intentionally prohibited."
+}

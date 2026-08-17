@@ -3,38 +3,26 @@
 from __future__ import annotations
 
 import argparse
+import os
 import time
 import uuid
 from dataclasses import asdict, replace
+from importlib.metadata import PackageNotFoundError, version as package_version
+from functools import lru_cache
 from pathlib import Path
 
-from dms_final_system.shared.contracts import AlarmLevel
-from dms_final_system.shared.feature_contract import RUNTIME_FEATURE_VERSION
-from dms_final_system.runtime.calibration import PersonalCalibrator
-from dms_final_system.runtime.alarm import AlarmController, LinuxAudioOutput, NullAlarmOutput
-from dms_final_system.runtime.capture import LatestFrameCapture, ReplayCapture
-from dms_final_system.runtime.config import load_config
-from dms_final_system.runtime.events import EventEngine
-from dms_final_system.runtime.evaluation import EvaluationSessionRecorder
-from dms_final_system.runtime.features import V3RuntimeFeatureBuilder
-from dms_final_system.runtime.fusion import FusionStateMachine
-from dms_final_system.runtime.hmi import VisualHMI
-from dms_final_system.runtime.integration import EvidenceBus
-from dms_final_system.runtime.model.bundle import (
-    assert_deployment_allowed,
-    read_active_model,
-    verify_bundle,
-)
-from dms_final_system.runtime.model.predictor import LightGBMRuntimePredictor
-from dms_final_system.runtime.model.drift import FeatureDriftMonitor
-from dms_final_system.runtime.objects import YoloBehaviorDetector
-from dms_final_system.runtime.perception import MediaPipeFacePerception
-from dms_final_system.runtime.recording import RollingIncidentRecorder
-from dms_final_system.runtime.telemetry import LiveStatus, StructuredTelemetry
-from dms_final_system.runtime.telemetry.structured import system_health
+from dms_final_system.runtime.config import RuntimeConfig, load_config
 
 
 SYSTEM_ROOT = Path(__file__).resolve().parents[1]
+
+
+@lru_cache(maxsize=8)
+def _package_version(name: str) -> str:
+    try:
+        return package_version(name)
+    except PackageNotFoundError:
+        return "unavailable"
 
 
 def _resolve(path: str | Path) -> Path:
@@ -42,8 +30,85 @@ def _resolve(path: str | Path) -> Path:
     return candidate if candidate.is_absolute() else SYSTEM_ROOT / candidate
 
 
+def _normalize_face_bbox(
+    face_detected: bool,
+    bbox_xyxy: tuple[float, float, float, float] | None,
+    frame_width: int,
+    frame_height: int,
+) -> list[float] | None:
+    """Convert the current pixel bbox to the dashboard's resolution-free contract."""
+    if not face_detected or bbox_xyxy is None:
+        return None
+    x1, y1, x2, y2 = bbox_xyxy
+    width = max(int(frame_width), 1)
+    height = max(int(frame_height), 1)
+    normalized = [
+        max(0.0, min(1.0, float(x1) / width)),
+        max(0.0, min(1.0, float(y1) / height)),
+        max(0.0, min(1.0, float(x2) / width)),
+        max(0.0, min(1.0, float(y2) / height)),
+    ]
+    return normalized if normalized[2] > normalized[0] and normalized[3] > normalized[1] else None
+
+
+def _apply_thread_caps(config: RuntimeConfig) -> None:
+    omp_threads = str(int(config.omp_num_threads))
+    os.environ["OMP_NUM_THREADS"] = omp_threads
+    os.environ["OPENBLAS_NUM_THREADS"] = omp_threads
+    os.environ["MKL_NUM_THREADS"] = omp_threads
+    os.environ["NUMEXPR_NUM_THREADS"] = omp_threads
+    os.environ["NCNN_NUM_THREADS"] = str(int(config.ncnn_num_threads))
+    try:
+        import cv2
+
+        cv2.setNumThreads(int(config.cv_num_threads))
+    except ImportError:
+        pass
+
+
 def run(config_path: Path, replay_path: Path | None = None) -> None:
     config = load_config(config_path)
+    _apply_thread_caps(config)
+
+    from dms_final_system.runtime.preflight import run_preflight
+
+    preflight = run_preflight(config, _resolve, replay=replay_path is not None)
+
+    from dms_final_system.shared.contracts import AlarmLevel
+    from dms_final_system.shared.feature_contract import RUNTIME_FEATURE_VERSION
+    from dms_final_system.runtime.calibration import PersonalCalibrator
+    from dms_final_system.runtime.alarm import AlarmController, NullAlarmOutput, PlatformAudioOutput
+    from dms_final_system.runtime.capture import ReplayCapture, create_live_capture
+    from dms_final_system.runtime.dashboard import DashboardProcess
+    from dms_final_system.runtime.events import EventEngine
+    from dms_final_system.runtime.evaluation import EvaluationSessionRecorder
+    from dms_final_system.runtime.features import V3RuntimeFeatureBuilder
+    from dms_final_system.runtime.fusion import FusionStateMachine
+    from dms_final_system.runtime.hmi import VisualHMI
+    from dms_final_system.runtime.integration import EvidenceBus
+    from dms_final_system.runtime.model.bundle import (
+        assert_deployment_allowed,
+        read_active_model,
+        verify_bundle,
+    )
+    from dms_final_system.runtime.model.predictor import LightGBMRuntimePredictor
+    from dms_final_system.runtime.model.drift import FeatureDriftMonitor
+    from dms_final_system.runtime.objects import SeatbeltDetector, YoloBehaviorDetector
+    from dms_final_system.runtime.perception import MediaPipeFacePerception
+    from dms_final_system.runtime.monitoring import (
+        RuntimeStatusStore,
+        SafeModeController,
+        StageTimingRegistry,
+        SystemMetricsCollector,
+        SystemMetricsSampler,
+    )
+    from dms_final_system.runtime.recording import (
+        CompressedFrameHub,
+        IncidentTriggerPolicy,
+        RollingIncidentRecorder,
+    )
+    from dms_final_system.runtime.telemetry import LiveStatus, StructuredTelemetry
+
     session_id = f"{config.session_name}-{uuid.uuid4().hex[:8]}"
     active_descriptor = read_active_model(_resolve(config.active_model_path))
     bundle = Path(active_descriptor["bundle_dir"])
@@ -70,7 +135,12 @@ def run(config_path: Path, replay_path: Path | None = None) -> None:
     live = LiveStatus(config.telemetry.live_status_hz)
     telemetry.emit(
         "Startup", "model_verified",
-        {**bundle_status, **golden, "deployment_mode": config.deployment_mode},
+        {
+            **bundle_status,
+            **golden,
+            "deployment_mode": config.deployment_mode,
+            "preflight": preflight,
+        },
     )
 
     perception = MediaPipeFacePerception(
@@ -83,6 +153,7 @@ def run(config_path: Path, replay_path: Path | None = None) -> None:
         config.perception.min_face_width_ratio,
         config.perception.min_interocular_distance_px,
         config.perception.min_eye_width_px,
+        process_width=config.perception.process_width,
     )
     calibrator = PersonalCalibrator(
         config.calibration.target_sec, config.calibration.max_sec,
@@ -104,15 +175,37 @@ def run(config_path: Path, replay_path: Path | None = None) -> None:
         config.behavior_detector,
         model_path=str(_resolve(config.behavior_detector.model_path)),
         manifest_path=str(_resolve(config.behavior_detector.manifest_path)),
+        ncnn_num_threads=config.ncnn_num_threads,
     )
+    seatbelt_config = replace(
+        config.seatbelt_detector,
+        model_path=str(_resolve(config.seatbelt_detector.model_path)),
+        manifest_path=str(_resolve(config.seatbelt_detector.manifest_path)),
+    )
+    behavior_detector = None
+    seatbelt_detector = None
     try:
         behavior_detector = YoloBehaviorDetector(
             behavior_config, evidence_bus, telemetry
         )
+        seatbelt_detector = SeatbeltDetector(
+            seatbelt_config, evidence_bus, telemetry
+        )
     except Exception:
+        if seatbelt_detector is not None:
+            seatbelt_detector.close()
+        if behavior_detector is not None:
+            behavior_detector.close()
         perception.close()
         telemetry.close()
         raise
+    stage_timings = StageTimingRegistry()
+    status_store = RuntimeStatusStore()
+    metrics_sampler = SystemMetricsSampler(
+        SystemMetricsCollector(_resolve(config.recorder.output_dir)),
+        config.power.sample_interval_sec,
+    ).start()
+    safe_mode_controller = SafeModeController(config.power)
     recorder = RollingIncidentRecorder(
         _resolve(config.recorder.output_dir), session_id, telemetry,
         pre_alert_sec=config.recorder.pre_alert_sec,
@@ -123,7 +216,36 @@ def run(config_path: Path, replay_path: Path | None = None) -> None:
         jpeg_quality=config.recorder.jpeg_quality,
         bitrate=config.recorder.bitrate,
         queue_size=config.recorder.queue_size,
+        codec=config.recorder.codec,
+        require_copy_mux=config.recorder.require_copy_mux,
+        reserve_free_bytes=config.recorder.reserve_free_bytes,
+        delete_oldest_when_full=config.recorder.delete_oldest_when_full,
     ) if config.recorder.enabled else None
+    incident_policy = IncidentTriggerPolicy(
+        config.recorder.trigger_states,
+        config.recorder.trigger_violations,
+        suppress_yawn_only=config.recorder.suppress_yawn_only,
+        episode_clear_sec=config.recorder.episode_clear_sec,
+    )
+    dashboard = DashboardProcess(
+        config.dashboard,
+        _resolve(config.recorder.output_dir),
+        telemetry,
+    ).start()
+    frame_hub = (
+        CompressedFrameHub(
+            telemetry,
+            jpeg_quality=config.recorder.jpeg_quality,
+            queue_size=config.recorder.queue_size,
+        )
+        if recorder is not None or dashboard.enabled
+        else None
+    )
+    if frame_hub is not None:
+        if recorder is not None:
+            frame_hub.subscribe(recorder.push_encoded)
+        if dashboard.enabled:
+            frame_hub.subscribe(dashboard.publish_preview)
     evaluation = EvaluationSessionRecorder(
         evaluation_root, session_id, telemetry,
         fps=config.evaluation.video_fps,
@@ -139,11 +261,16 @@ def run(config_path: Path, replay_path: Path | None = None) -> None:
             "eye_event_version": "eye-events-v2.4",
             "drift_reference_available": drift.available,
             "behavior_detector_config": asdict(config.behavior_detector),
+            "seatbelt_detector_config": asdict(config.seatbelt_detector),
             "evaluation_config": asdict(config.evaluation),
         },
     ) if config.evaluation.enabled else None
 
-    frame_sinks = [item.push for item in (recorder, evaluation) if item is not None]
+    frame_sinks = []
+    if frame_hub is not None:
+        frame_sinks.append(frame_hub.push)
+    if evaluation is not None:
+        frame_sinks.append(evaluation.push)
 
     def publish_frame(packet) -> None:
         for sink in frame_sinks:
@@ -153,17 +280,17 @@ def run(config_path: Path, replay_path: Path | None = None) -> None:
         capture = ReplayCapture(replay_path, config.camera.fps)
         source_kind = "replay"
     else:
-        capture = LatestFrameCapture(
-            config.camera.source, config.camera.width, config.camera.height,
-            config.camera.fps, config.camera.ai_queue_size,
+        capture = create_live_capture(
+            config.camera,
             frame_sink=publish_frame if frame_sinks else None,
-        ).start()
+        )
         source_kind = "camera"
     if evaluation:
         evaluation.update_metadata(
             source_kind=source_kind,
             replay_path=str(replay_path) if replay_path else None,
             camera_source=config.camera.source if not replay_path else None,
+            camera_configuration=getattr(capture, "actual_configuration", {}),
             alarm_config=asdict(config.alarm),
             hmi_config=asdict(config.hmi),
         )
@@ -172,7 +299,7 @@ def run(config_path: Path, replay_path: Path | None = None) -> None:
         or (not config.alarm.live_camera_only and config.alarm.allow_replay_audio)
     )
     alarm_output = (
-        LinuxAudioOutput(config.alarm.backend, config.alarm.device, config.alarm.master_gain)
+        PlatformAudioOutput(config.alarm.backend, config.alarm.device, config.alarm.master_gain)
         if config.alarm.enabled and config.alarm.mode == "LOCAL" and audible_source
         else NullAlarmOutput()
     )
@@ -185,10 +312,14 @@ def run(config_path: Path, replay_path: Path | None = None) -> None:
         capture.close()
         perception.close()
         behavior_detector.close()
+        if frame_hub:
+            frame_hub.close()
         if recorder:
             recorder.close()
         if evaluation:
             evaluation.close()
+        dashboard.close()
+        metrics_sampler.close()
         telemetry.close()
         raise
     hmi = VisualHMI(config.hmi, telemetry, enabled=source_kind == "camera")
@@ -202,12 +333,19 @@ def run(config_path: Path, replay_path: Path | None = None) -> None:
         },
     )
 
-    last_inference = last_health = last_stage_log = float("-inf")
+    last_inference = last_health = last_stage_log = last_status = float("-inf")
+    last_health_sample = None
+    health = metrics_sampler.snapshot()
+    safe_mode_state = safe_mode_controller.update(time.monotonic(), health)
     last_prediction = None
     last_event_snapshot = None
     last_drift = None
     processed = 0
     wall_started = time.monotonic()
+    last_yolo_frame_id = -1
+    last_seatbelt_frame_id = -1
+    yolo_inferences = 0
+    seatbelt_inferences = 0
     try:
         while True:
             try:
@@ -216,10 +354,18 @@ def run(config_path: Path, replay_path: Path | None = None) -> None:
                 break
             if source_kind == "replay":
                 publish_frame(packet)
-            behavior_detector.submit(packet)
             perception_started = time.perf_counter()
             signal = perception.process(packet)
             perception_ms = (time.perf_counter() - perception_started) * 1000
+            stage_timings.record("perception", perception_ms)
+            behavior_detector.submit(
+                packet,
+                face_bbox_xyxy=perception.latest_face_bbox_xyxy,
+            )
+            seatbelt_detector.submit(
+                packet,
+                face_bbox_xyxy=perception.latest_face_bbox_xyxy,
+            )
             processed += 1
             event_emitted = False
             calibration = calibrator.update(signal)
@@ -259,6 +405,7 @@ def run(config_path: Path, replay_path: Path | None = None) -> None:
                     inference_started = time.perf_counter()
                     last_prediction = predictor.predict(snapshot)
                     inference_ms = (time.perf_counter() - inference_started) * 1000
+                    stage_timings.record("lightgbm", inference_ms)
                     telemetry.emit(
                         "Model", "prediction",
                         {"raw_probability": last_prediction.raw_score,
@@ -301,10 +448,21 @@ def run(config_path: Path, replay_path: Path | None = None) -> None:
                 eye_evidence_trustworthy=eye_evidence_trustworthy,
             )
             fusion_ms = (time.perf_counter() - fusion_started) * 1000
+            stage_timings.record("fusion", fusion_ms)
             incident_id = None
             alarm_status = alarm.snapshot()
             behavior_snapshot = behavior_detector.snapshot()
-            if recorder and decision.alarm_level in {AlarmLevel.WARNING, AlarmLevel.CRITICAL}:
+            seatbelt_snapshot = seatbelt_detector.snapshot()
+            if behavior_snapshot.frame_id != last_yolo_frame_id and behavior_snapshot.frame_id >= 0:
+                last_yolo_frame_id = behavior_snapshot.frame_id
+                yolo_inferences += 1
+                stage_timings.record("yolo", behavior_snapshot.inference_ms)
+            if seatbelt_snapshot.frame_id != last_seatbelt_frame_id and seatbelt_snapshot.frame_id >= 0:
+                last_seatbelt_frame_id = seatbelt_snapshot.frame_id
+                seatbelt_inferences += 1
+                stage_timings.record("seatbelt", seatbelt_snapshot.inference_ms)
+            incident_policy_result = incident_policy.evaluate(packet.monotonic_sec, decision)
+            if recorder and incident_policy_result.qualifies:
                 probability = decision.smoothed_probability or 0.0
                 incident_reasons = list(
                     dict.fromkeys([*decision.state_entry_reason, *decision.current_reason_codes])
@@ -330,7 +488,10 @@ def run(config_path: Path, replay_path: Path | None = None) -> None:
                         "fusion_version": config.fusion.version,
                         "alarm_status": alarm_status.to_dict(),
                         "behavior_detector": behavior_snapshot.to_dict(),
+                        "seatbelt_detector": seatbelt_snapshot.to_dict(),
                     },
+                    start_new=incident_policy_result.onset,
+                    trigger_kinds=incident_policy_result.trigger_kinds,
                 )
             alarm_status = alarm.update(
                 packet.monotonic_sec,
@@ -451,11 +612,164 @@ def run(config_path: Path, replay_path: Path | None = None) -> None:
                 fps=f"{effective_fps:.1f}",
                 dropped=getattr(capture, "dropped_frames", 0),
             )
+            latest_health = metrics_sampler.snapshot()
+            sampled_at = latest_health.get("sampled_monotonic_sec")
+            if sampled_at is not None and sampled_at != last_health_sample:
+                last_health_sample = sampled_at
+                health = latest_health
+                safe_mode_state = safe_mode_controller.update(packet.monotonic_sec, health)
+                behavior_detector.set_safe_mode(
+                    safe_mode_state.enabled,
+                    config.power.safe_yolo_interval_sec,
+                )
+                dashboard.set_safe_mode(safe_mode_state.enabled)
+                if safe_mode_state.changed:
+                    telemetry.emit(
+                        "Power",
+                        "safe_mode_changed",
+                        {
+                            "enabled": safe_mode_state.enabled,
+                            "reason": safe_mode_state.reason,
+                            "temperature_c": health.get("temperature_c"),
+                            "throttled": health.get("throttled"),
+                        },
+                        monotonic_sec=packet.monotonic_sec,
+                        level="WARNING" if safe_mode_state.enabled else "INFO",
+                    )
+
+            status_interval = 1.0 / max(config.dashboard.status_hz, 0.1)
+            if packet.monotonic_sec - last_status >= status_interval:
+                last_status = packet.monotonic_sec
+                camera_configuration = getattr(capture, "actual_configuration", {})
+                frame_height, frame_width = packet.frame.shape[:2]
+                face_bbox_normalized = _normalize_face_bbox(
+                    signal.face_detected,
+                    perception.latest_face_bbox_xyxy,
+                    frame_width,
+                    frame_height,
+                )
+                status = status_store.update(
+                    runtime={
+                        "status": "RUNNING",
+                        "session_id": session_id,
+                        "deployment_mode": config.deployment_mode,
+                        "uptime_sec": elapsed,
+                    },
+                    driver={
+                        "state": decision.driver_state.value,
+                        "target_state": (
+                            decision.target_state.value
+                            if decision.target_state else decision.driver_state.value
+                        ),
+                        "violations": list(decision.violations),
+                        "probability": decision.smoothed_probability,
+                        "reason_codes": list(decision.reason_codes),
+                        "alarm": alarm_status.to_dict(),
+                        "face_detected": signal.face_detected,
+                        "face_quality": signal.face_quality,
+                        "face_bbox_normalized": face_bbox_normalized,
+                        "face_bbox_frame_id": perception.latest_face_bbox_frame_id,
+                        "driver_distance_status": signal.driver_distance_status,
+                    },
+                    camera={
+                        "backend": camera_configuration.get("backend", source_kind),
+                        "width": camera_configuration.get("width", config.camera.width),
+                        "height": camera_configuration.get("height", config.camera.height),
+                        "requested_fps": config.camera.fps,
+                        "actual_configuration": camera_configuration,
+                        "dropped_frames": getattr(capture, "dropped_frames", 0),
+                        "capture_errors": getattr(capture, "capture_errors", 0),
+                        "last_error": getattr(capture, "last_error", ""),
+                    },
+                    performance={
+                        "effective_fps": effective_fps,
+                        "processed_frames": processed,
+                        "capture_frames": getattr(capture, "captured_frames", processed),
+                        "encoded_frames": frame_hub.encoded_frames if frame_hub else 0,
+                        "capture_fps": getattr(capture, "captured_frames", processed) / elapsed,
+                        "ai_fps": effective_fps,
+                        "yolo_fps": yolo_inferences / elapsed,
+                        "seatbelt_fps": seatbelt_inferences / elapsed,
+                        "yolo_interval_sec": behavior_detector.effective_interval_sec,
+                        "recorder_fps": (
+                            frame_hub.encoded_frames / elapsed if frame_hub else 0.0
+                        ),
+                        "preview_fps_limit": (
+                            config.dashboard.safe_preview_fps
+                            if safe_mode_state.enabled else config.dashboard.preview_fps
+                        ),
+                        "preview_fps": dashboard.published_preview / elapsed,
+                        "latency": stage_timings.snapshot(),
+                        "decision_staleness_sec": prediction_age if last_prediction else None,
+                        "queues": {
+                            "capture": getattr(getattr(capture, "queue", None), "qsize", lambda: 0)(),
+                            "behavior": behavior_detector.queue.qsize(),
+                            "seatbelt": seatbelt_detector.queue.qsize(),
+                            "frame_hub": frame_hub.queue.qsize() if frame_hub else 0,
+                            "recorder": recorder.queue.qsize() if recorder else 0,
+                            "evaluation": evaluation.queue.qsize() if evaluation else 0,
+                        },
+                    },
+                    system=health,
+                    power={
+                        "safe_mode": safe_mode_state.enabled,
+                        "reason": safe_mode_state.reason,
+                        "entered_monotonic_sec": safe_mode_state.entered_monotonic_sec,
+                        "configured_cpu_max_mhz": config.power.cpu_max_mhz,
+                        "throttled": health.get("throttled", {}),
+                    },
+                    models={
+                        "drowsiness": predictor.model_version,
+                        "drowsiness_backend": f"LightGBM {_package_version('lightgbm')}",
+                        "feature_version": RUNTIME_FEATURE_VERSION,
+                        "fusion_version": config.fusion.version,
+                        "mediapipe": f"MediaPipe {_package_version('mediapipe')} face-landmarker",
+                        "behavior": behavior_snapshot.model_version,
+                        "behavior_backend": behavior_snapshot.backend,
+                        "behavior_health": behavior_snapshot.health,
+                        "behavior_runtime_version": (
+                            _package_version("ncnn")
+                            if behavior_snapshot.backend.startswith("ncnn")
+                            else behavior_snapshot.backend
+                        ),
+                        "ncnn_threads": config.ncnn_num_threads,
+                        "behavior_exporter_versions": preflight.get(
+                            "ncnn_exporter_versions", {}
+                        ),
+                        "seatbelt": seatbelt_snapshot.model_version,
+                        "seatbelt_backend": seatbelt_snapshot.backend,
+                        "seatbelt_health": seatbelt_snapshot.health,
+                        "seatbelt_shadow_mode": seatbelt_snapshot.shadow_mode,
+                        "commercial_license_status": "BLOCKED_PENDING_SAFEE_APPROVAL",
+                        "drift": last_drift.reason if last_drift else "PENDING",
+                        "model_contribution_enabled": model_contribution_enabled,
+                    },
+                    recording={
+                        "enabled": recorder is not None,
+                        "active_incident": recorder.active.incident_id if recorder and recorder.active else None,
+                        "incident_count": recorder.incident_count if recorder else 0,
+                        "finalized_incidents": recorder.finalized_incidents if recorder else 0,
+                        "deleted_incidents": recorder.deleted_incidents if recorder else 0,
+                        "dropped_frames": recorder.dropped_frames if recorder else 0,
+                        "hub_dropped_frames": frame_hub.dropped_frames if frame_hub else 0,
+                        "encoder": "ffmpeg_mjpeg_copy" if recorder else "disabled",
+                    },
+                    seatbelt=seatbelt_snapshot.to_dict(),
+                    dashboard={
+                        "healthy": dashboard.healthy,
+                        "clients": dashboard.active_clients,
+                        "dropped_status": dashboard.dropped_status,
+                        "dropped_preview": dashboard.dropped_preview,
+                        "published_preview": dashboard.published_preview,
+                    },
+                )
+                dashboard.publish_status(status)
+
             if packet.monotonic_sec - last_health >= 5.0:
                 last_health = packet.monotonic_sec
                 telemetry.emit(
                     "Health", "status",
-                    {**system_health(), "effective_fps": effective_fps,
+                    {**health, "effective_fps": effective_fps,
                      "capture_dropped": getattr(capture, "dropped_frames", 0),
                      "capture_queue_depth": getattr(getattr(capture, "queue", None), "qsize", lambda: 0)(),
                      "recorder_dropped": recorder.dropped_frames if recorder else 0,
@@ -470,6 +784,12 @@ def run(config_path: Path, replay_path: Path | None = None) -> None:
                      "recovery_status": decision.recovery_status,
                      "alarm_status": alarm_status.to_dict(),
                      "behavior_detector": behavior_snapshot.to_dict(),
+                     "seatbelt_detector": seatbelt_snapshot.to_dict(),
+                     "safe_mode": safe_mode_state.enabled,
+                     "safe_mode_reason": safe_mode_state.reason,
+                     "stage_latencies": stage_timings.snapshot(),
+                     "frame_hub_dropped": frame_hub.dropped_frames if frame_hub else 0,
+                     "dashboard_healthy": dashboard.healthy,
                      "telemetry_dropped": telemetry.dropped_records},
                     monotonic_sec=packet.monotonic_sec,
                 )
@@ -480,12 +800,17 @@ def run(config_path: Path, replay_path: Path | None = None) -> None:
         capture.close()
         perception.close()
         behavior_detector.close()
+        seatbelt_detector.close()
         hmi.close()
         alarm.close()
+        if frame_hub:
+            frame_hub.close()
         if recorder:
             recorder.close()
         if evaluation:
             evaluation.close()
+        dashboard.close()
+        metrics_sampler.close()
         telemetry.emit("Runtime", "session_finished", {"processed_frames": processed})
         telemetry.close()
 
@@ -497,6 +822,10 @@ def main() -> None:
     parser.add_argument("--verify-bundle", type=Path)
     args = parser.parse_args()
     if args.verify_bundle:
+        _apply_thread_caps(RuntimeConfig())
+        from dms_final_system.runtime.model.bundle import verify_bundle
+        from dms_final_system.runtime.model.predictor import LightGBMRuntimePredictor
+
         info = verify_bundle(args.verify_bundle)
         predictor = LightGBMRuntimePredictor(args.verify_bundle, verify=False)
         print({**info, **predictor.verify_golden_samples()})

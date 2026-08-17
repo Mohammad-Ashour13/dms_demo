@@ -8,6 +8,7 @@
   },
   "perception": {
     "face_landmarker_path": "models/mediapipe/face_landmarker.task",
+    "process_width": 256,
     "min_detection_confidence": 0.5,
     "min_tracking_confidence": 0.5,
     "min_face_quality": 0.55,
@@ -90,16 +91,23 @@
   "behavior_detector": {
     "enabled": false,
     "required": false,
-    "model_path": "models/driver_behavior/luthfi_yolo11n/best_yolo11n.pt",
+    "model_path": "models/driver_behavior/luthfi_yolo11n/best_yolo11n_ncnn_model",
     "manifest_path": "models/driver_behavior/luthfi_yolo11n/model_manifest.json",
-    "backend": "ultralytics",
-    "execution_mode": "process",
+    "backend": "auto",
+    "execution_mode": "auto",
     "device": "cpu",
     "image_size": 640,
     "iou_threshold": 0.45,
     "inference_interval_sec": 0.5,
+    "adaptive_interval": true,
+    "latency_budget_ms": 250.0,
+    "max_inference_interval_sec": 0.75,
     "queue_size": 1,
     "driver_roi": [0.0, 0.0, 1.0, 1.0],
+    "roi_mode": "face",
+    "roi_scale": 1.6,
+    "roi_min_size": 96,
+    "roi_fallback_static_on_no_face": true,
     "temporal_window_sec": 1.5,
     "minimum_samples": 3,
     "activation_ratio": 0.6,
@@ -117,6 +125,27 @@
       "cigarette": "SMOKING",
       "drink_or_food": "EATING"
     }
+  },
+  "seatbelt_detector": {
+    "enabled": false,
+    "required": false,
+    "model_path": "models/seatbelt/risef_yolov11s",
+    "manifest_path": "models/seatbelt/risef_yolov11s/model_manifest.json",
+    "image_size": 224,
+    "ncnn_num_threads": 1,
+    "inference_interval_sec": 2.0,
+    "queue_size": 1,
+    "no_seatbelt_threshold": 0.80,
+    "clear_threshold": 0.60,
+    "activation_persistence_sec": 4.0,
+    "clear_persistence_sec": 4.0,
+    "evidence_refresh_sec": 2.0,
+    "evidence_ttl_sec": 4.5,
+    "roi_width_scale": 2.8,
+    "roi_height_scale": 3.1,
+    "roi_top_offset": -0.15,
+    "roi_min_size": 128,
+    "shadow_mode": true
   },
   "recorder": {
     "enabled": true,
@@ -182,5 +211,8 @@
   "deployment_mode": "SHADOW",
   "active_model_path": "models/drowsiness/active_model.json",
   "inference_interval_sec": 0.5,
-  "session_name": "raspberry-live"
+  "session_name": "raspberry-live",
+  "cv_num_threads": 2,
+  "omp_num_threads": 2,
+  "ncnn_num_threads": 3
 }

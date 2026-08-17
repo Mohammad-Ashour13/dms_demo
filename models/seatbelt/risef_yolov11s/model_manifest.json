@@ -1,0 +1,32 @@
+{
+  "model_version": "risef-yolov11s-seatbelt-0187cdb",
+  "architecture": "Ultralytics YOLO11s classification",
+  "source_repository": "https://huggingface.co/RISEF/yolov11s-seatbelt",
+  "source_revision": "0187cdb",
+  "source_artifact": "best.onnx",
+  "source_sha256": "bb945fdd1750dc4fdd98b4683a605ac6a1c9c7f4417324faf76b0c1b4f319df2",
+  "source_license": "AGPL-3.0",
+  "input": {
+    "width": 224,
+    "height": 224,
+    "color_order": "RGB",
+    "normalization": "scale_0_1"
+  },
+  "class_names": [
+    "no_seatbelt",
+    "seat_belt"
+  ],
+  "enabled_class": {
+    "no_seatbelt": "SEATBELT_MISSING"
+  },
+  "ncnn": {
+    "created_by": "pnnx 20260526",
+    "input_name": "in0",
+    "output_name": "out0",
+    "image_size": 224,
+    "artifacts_sha256": {
+      "model.ncnn.bin": "e153a35335184746747465ee8a8210dd49fc23cbab55fbcd22274a6d998bcd9f",
+      "model.ncnn.param": "f3ab5adf304c8caec5da92b591bc057b69c718b03e6b3c3e7ab8e063bf2247ca"
+    }
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "schema_version": "behavior-replay-annotations-v1",
+  "class_thresholds": {
+    "phone": 0.4,
+    "cigarette": 0.3,
+    "drink_or_food": 0.35
+  },
+  "frames": [
+    {
+      "image": "frames/frame-000001.jpg",
+      "labels": ["phone"]
+    },
+    {
+      "image": "frames/frame-000002.jpg",
+      "labels": ["cigarette", "drink_or_food"]
+    }
+  ]
+}

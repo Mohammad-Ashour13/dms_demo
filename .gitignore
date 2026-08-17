@@ -1,9 +1,15 @@
 __pycache__/
 *.py[cod]
+build/
+*.egg-info/
 .pytest_cache/
 logs/*.jsonl*
 incidents/outbox/
 evaluation_sessions/
 models/drowsiness/active_model.json
+!models/drowsiness/active_model.json
 training_colab/outputs/
 *.zip
+*.lock
+
+dms_demo-output.*

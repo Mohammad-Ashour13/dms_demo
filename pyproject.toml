@@ -1,0 +1,63 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dms-final-system"
+version = "2.5.0"
+description = "Safee driver monitoring runtime for Raspberry Pi"
+readme = "README_AR.md"
+requires-python = ">=3.11"
+dependencies = [
+    "aiohttp>=3.10,<4",
+    "lightgbm>=4.3,<5",
+    "mediapipe>=0.10.14,<0.11",
+    "ncnn>=1.0",
+    "numpy>=1.26,<2.1",
+    "opencv-python>=4.10,<5",
+    "pandas>=2.1,<3",
+    "psutil>=5.9,<7",
+    "pytest>=8,<9",
+    "ultralytics>=8.3,<9",
+]
+
+[project.scripts]
+dms-runtime = "dms_final_system.runtime.app:main"
+dms-activate-model = "dms_final_system.runtime.model.activate:main"
+dms-export-ncnn = "dms_final_system.runtime.objects.export_ncnn:main"
+dms-verify-behavior-model = "dms_final_system.runtime.objects.verify_model:main"
+dms-compare-ncnn = "dms_final_system.runtime.objects.compare_ncnn:main"
+
+[tool.setuptools]
+package-dir = {dms_final_system = "."}
+packages = [
+  "dms_final_system",
+  "dms_final_system.runtime",
+  "dms_final_system.runtime.alarm",
+  "dms_final_system.runtime.calibration",
+  "dms_final_system.runtime.capture",
+  "dms_final_system.runtime.dashboard",
+  "dms_final_system.runtime.evaluation",
+  "dms_final_system.runtime.events",
+  "dms_final_system.runtime.features",
+  "dms_final_system.runtime.fusion",
+  "dms_final_system.runtime.hmi",
+  "dms_final_system.runtime.integration",
+  "dms_final_system.runtime.model",
+  "dms_final_system.runtime.monitoring",
+  "dms_final_system.runtime.objects",
+  "dms_final_system.runtime.perception",
+  "dms_final_system.runtime.recording",
+  "dms_final_system.runtime.telemetry",
+  "dms_final_system.runtime.temporal",
+  "dms_final_system.shared",
+]
+include-package-data = true
+
+[tool.setuptools.package-data]
+dms_final_system = [
+  "runtime/dashboard/static/*",
+  "models/**/*.json",
+  "models/**/*.md",
+  "configs/*.json",
+]

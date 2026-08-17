@@ -8,16 +8,23 @@ from typing import Any, TypeVar
 
 @dataclass(slots=True)
 class CameraConfig:
+    backend: str = "opencv"
     source: int | str = 0
+    camera_num: int = 0
     width: int = 640
     height: int = 480
     fps: float = 15.0
     ai_queue_size: int = 2
+    # Picamera2's RGB888 memory layout is BGR-compatible with OpenCV.
+    pixel_format: str = "RGB888"
+    system_python: str = "/usr/bin/python3"
+    startup_timeout_sec: float = 15.0
 
 
 @dataclass(slots=True)
 class PerceptionConfig:
     face_landmarker_path: str = "models/mediapipe/face_landmarker.task"
+    process_width: int = 256
     min_detection_confidence: float = 0.5
     min_tracking_confidence: float = 0.5
     min_face_quality: float = 0.55
@@ -110,16 +117,25 @@ class DriftConfig:
 class BehaviorDetectorConfig:
     enabled: bool = False
     required: bool = False
-    model_path: str = "models/driver_behavior/luthfi_yolo11n/best_yolo11n.pt"
+    model_path: str = "models/driver_behavior/luthfi_yolo11n/best_yolo11n_ncnn_model"
     manifest_path: str = "models/driver_behavior/luthfi_yolo11n/model_manifest.json"
-    backend: str = "ultralytics"
-    execution_mode: str = "process"
+    backend: str = "auto"
+    execution_mode: str = "auto"
     device: str = "cpu"
+    ncnn_num_threads: int = 3
     image_size: int = 640
     iou_threshold: float = 0.45
     inference_interval_sec: float = 0.50
+    adaptive_interval: bool = True
+    latency_budget_ms: float = 250.0
+    max_inference_interval_sec: float = 0.75
     queue_size: int = 1
     driver_roi: list[float] = field(default_factory=lambda: [0.0, 0.0, 1.0, 1.0])
+    roi_mode: str = "face"
+    roi_scale: float = 1.6
+    roi_min_size: int = 96
+    roi_fallback_static_on_no_face: bool = True
+    context_roi_interval_sec: float = 2.0
     temporal_window_sec: float = 1.5
     minimum_samples: int = 3
     activation_ratio: float = 0.60
@@ -144,6 +160,33 @@ class BehaviorDetectorConfig:
 
 
 @dataclass(slots=True)
+class SeatbeltDetectorConfig:
+    """Low-rate binary seat-belt classifier for the current driver's torso."""
+
+    enabled: bool = False
+    required: bool = False
+    model_path: str = "models/seatbelt/risef_yolov11s"
+    manifest_path: str = "models/seatbelt/risef_yolov11s/model_manifest.json"
+    image_size: int = 224
+    ncnn_num_threads: int = 1
+    inference_interval_sec: float = 2.0
+    queue_size: int = 1
+    no_seatbelt_threshold: float = 0.80
+    clear_threshold: float = 0.60
+    activation_persistence_sec: float = 4.0
+    clear_persistence_sec: float = 4.0
+    evidence_refresh_sec: float = 2.0
+    evidence_ttl_sec: float = 4.5
+    roi_width_scale: float = 2.8
+    roi_height_scale: float = 3.1
+    roi_top_offset: float = -0.15
+    roi_min_size: int = 128
+    # Shadow mode emits telemetry and dashboard status only.  It never
+    # publishes SEATBELT_MISSING into Fusion, alarms, or incident recording.
+    shadow_mode: bool = True
+
+
+@dataclass(slots=True)
 class RecorderConfig:
     enabled: bool = True
     output_dir: str = "incidents/outbox"
@@ -155,6 +198,18 @@ class RecorderConfig:
     jpeg_quality: int = 75
     bitrate: str = "1800k"
     queue_size: int = 256
+    codec: str = "mjpeg_copy"
+    require_copy_mux: bool = False
+    reserve_free_bytes: int = 2 * 1024 * 1024 * 1024
+    delete_oldest_when_full: bool = True
+    trigger_states: list[str] = field(
+        default_factory=lambda: ["FATIGUE_WARNING", "DROWSY", "CRITICAL"]
+    )
+    trigger_violations: list[str] = field(
+        default_factory=lambda: ["PHONE_USE", "SMOKING", "EATING"]
+    )
+    suppress_yawn_only: bool = True
+    episode_clear_sec: float = 2.0
 
 
 @dataclass(slots=True)
@@ -217,6 +272,29 @@ class HMIConfig:
 
 
 @dataclass(slots=True)
+class DashboardConfig:
+    enabled: bool = False
+    host: str = "0.0.0.0"
+    port: int = 8080
+    status_hz: float = 2.0
+    preview_fps: float = 15.0
+    safe_preview_fps: float = 5.0
+    max_clients: int = 2
+    title: str = "Safee Driver Monitoring"
+
+
+@dataclass(slots=True)
+class PowerConfig:
+    enabled: bool = True
+    sample_interval_sec: float = 1.0
+    enter_temperature_c: float = 78.0
+    exit_temperature_c: float = 72.0
+    recovery_sec: float = 60.0
+    safe_yolo_interval_sec: float = 0.75
+    cpu_max_mhz: int = 0
+
+
+@dataclass(slots=True)
 class RuntimeConfig:
     camera: CameraConfig = field(default_factory=CameraConfig)
     perception: PerceptionConfig = field(default_factory=PerceptionConfig)
@@ -225,15 +303,21 @@ class RuntimeConfig:
     fusion: FusionConfig = field(default_factory=FusionConfig)
     drift: DriftConfig = field(default_factory=DriftConfig)
     behavior_detector: BehaviorDetectorConfig = field(default_factory=BehaviorDetectorConfig)
+    seatbelt_detector: SeatbeltDetectorConfig = field(default_factory=SeatbeltDetectorConfig)
     recorder: RecorderConfig = field(default_factory=RecorderConfig)
     telemetry: TelemetryConfig = field(default_factory=TelemetryConfig)
     evaluation: EvaluationConfig = field(default_factory=EvaluationConfig)
     alarm: AlarmConfig = field(default_factory=AlarmConfig)
     hmi: HMIConfig = field(default_factory=HMIConfig)
+    dashboard: DashboardConfig = field(default_factory=DashboardConfig)
+    power: PowerConfig = field(default_factory=PowerConfig)
     deployment_mode: str = "SHADOW"
     active_model_path: str = "models/drowsiness/active_model.json"
     inference_interval_sec: float = 0.5
     session_name: str = "raspberry-live"
+    cv_num_threads: int = 2
+    omp_num_threads: int = 2
+    ncnn_num_threads: int = 3
 
 
 T = TypeVar("T")
@@ -266,11 +350,14 @@ def load_config(path: Path) -> RuntimeConfig:
         "fusion": FusionConfig,
         "drift": DriftConfig,
         "behavior_detector": BehaviorDetectorConfig,
+        "seatbelt_detector": SeatbeltDetectorConfig,
         "recorder": RecorderConfig,
         "telemetry": TelemetryConfig,
         "evaluation": EvaluationConfig,
         "alarm": AlarmConfig,
         "hmi": HMIConfig,
+        "dashboard": DashboardConfig,
+        "power": PowerConfig,
     }
     for key, cls in nested.items():
         if key in raw:
@@ -299,6 +386,8 @@ def load_config(path: Path) -> RuntimeConfig:
         raise ValueError("events.binocular_close_sync_sec must be positive")
     if not 0 < config.events.max_eye_gaze_offset <= 1:
         raise ValueError("events.max_eye_gaze_offset must be in (0, 1]")
+    if config.perception.process_width < 0:
+        raise ValueError("perception.process_width must be zero or positive")
     if not 0 < config.perception.min_face_width_ratio < 1:
         raise ValueError("perception.min_face_width_ratio must be in (0, 1)")
     if min(
@@ -306,6 +395,21 @@ def load_config(path: Path) -> RuntimeConfig:
         config.perception.min_eye_width_px,
     ) <= 0:
         raise ValueError("perception eye pixel-resolution thresholds must be positive")
+    config.camera.backend = str(config.camera.backend).lower()
+    if config.camera.backend not in {
+        "opencv",
+        "picamera2",
+        "picamera2_auto",
+        "picamera2_process",
+    }:
+        raise ValueError(
+            "camera.backend must be opencv, picamera2, picamera2_auto, or "
+            "picamera2_process"
+        )
+    if min(config.camera.width, config.camera.height, config.camera.ai_queue_size) <= 0 or config.camera.fps <= 0:
+        raise ValueError("camera dimensions, fps and queue size must be positive")
+    if config.camera.startup_timeout_sec <= 0:
+        raise ValueError("camera.startup_timeout_sec must be positive")
     if not 0 <= config.fusion.perclos_exit < config.fusion.perclos_warning <= 1:
         raise ValueError("fusion PERCLOS thresholds must satisfy 0 <= exit < enter <= 1")
     if not 0 < config.fusion.precritical_drowsy_closure_sec < config.events.prolonged_closure_sec:
@@ -313,12 +417,34 @@ def load_config(path: Path) -> RuntimeConfig:
             "fusion.precritical_drowsy_closure_sec must be positive and below prolonged closure"
         )
     detector = config.behavior_detector
-    if detector.backend not in {"ultralytics"}:
-        raise ValueError("behavior_detector.backend must be ultralytics")
-    if detector.execution_mode not in {"process", "thread"}:
-        raise ValueError("behavior_detector.execution_mode must be process or thread")
+    detector.backend = str(detector.backend).lower()
+    detector.execution_mode = str(detector.execution_mode).lower()
+    detector.roi_mode = str(detector.roi_mode).lower()
+    if detector.backend not in {"auto", "ncnn", "onnx", "pytorch", "ultralytics"}:
+        raise ValueError("behavior_detector.backend must be auto, ncnn, onnx, pytorch or ultralytics")
+    if detector.execution_mode not in {"auto", "process", "thread"}:
+        raise ValueError("behavior_detector.execution_mode must be auto, process or thread")
+    if detector.roi_mode not in {"face", "static", "full"}:
+        raise ValueError("behavior_detector.roi_mode must be face, static or full")
     if detector.image_size <= 0 or detector.inference_interval_sec <= 0 or detector.queue_size <= 0:
         raise ValueError("behavior detector image size, interval and queue size must be positive")
+    if detector.ncnn_num_threads <= 0:
+        raise ValueError("behavior_detector.ncnn_num_threads must be positive")
+    if detector.latency_budget_ms <= 0 or detector.max_inference_interval_sec < detector.inference_interval_sec:
+        raise ValueError("behavior detector adaptive interval settings are invalid")
+    if detector.minimum_samples > 1:
+        maximum_sampling_interval = detector.temporal_window_sec / (detector.minimum_samples - 1)
+        if detector.max_inference_interval_sec > maximum_sampling_interval + 1e-9:
+            raise ValueError(
+                "behavior_detector.max_inference_interval_sec cannot supply minimum_samples "
+                "inside temporal_window_sec"
+            )
+    if (
+        detector.roi_scale < 1.0
+        or detector.roi_min_size <= 0
+        or detector.context_roi_interval_sec <= 0
+    ):
+        raise ValueError("behavior_detector ROI scale and min size are invalid")
     if detector.minimum_samples <= 0 or detector.temporal_window_sec <= 0:
         raise ValueError("behavior detector temporal settings must be positive")
     if not 0 < detector.activation_ratio <= 1:
@@ -336,6 +462,62 @@ def load_config(path: Path) -> RuntimeConfig:
         raise ValueError("behavior detector thresholds and mapping must define the same source classes")
     if any(not 0 < float(value) <= 1 for value in detector.class_thresholds.values()):
         raise ValueError("behavior detector class thresholds must be in (0, 1]")
+    seatbelt = config.seatbelt_detector
+    if (
+        seatbelt.image_size <= 0
+        or seatbelt.ncnn_num_threads <= 0
+        or seatbelt.queue_size <= 0
+        or seatbelt.inference_interval_sec <= 0
+    ):
+        raise ValueError("seatbelt detector image size, threads, interval and queue size must be positive")
+    if not 0 < seatbelt.clear_threshold <= seatbelt.no_seatbelt_threshold <= 1:
+        raise ValueError("seatbelt detector thresholds must satisfy 0 < clear <= no_seatbelt <= 1")
+    if (
+        seatbelt.activation_persistence_sec < 0
+        or seatbelt.clear_persistence_sec < 0
+        or seatbelt.evidence_refresh_sec <= 0
+        or seatbelt.evidence_ttl_sec <= seatbelt.evidence_refresh_sec
+    ):
+        raise ValueError("seatbelt detector temporal settings are invalid")
+    if (
+        seatbelt.roi_width_scale < 1.0
+        or seatbelt.roi_height_scale < 1.0
+        or seatbelt.roi_min_size <= 0
+    ):
+        raise ValueError("seatbelt detector torso ROI settings are invalid")
+    if min(config.cv_num_threads, config.omp_num_threads, config.ncnn_num_threads) <= 0:
+        raise ValueError("runtime thread caps must be positive")
+    recorder = config.recorder
+    if recorder.codec not in {"mjpeg_copy", "legacy_h264"}:
+        raise ValueError("recorder.codec must be mjpeg_copy or legacy_h264")
+    if min(recorder.pre_alert_sec, recorder.post_alert_sec, recorder.max_clip_sec) <= 0:
+        raise ValueError("recorder clip timings must be positive")
+    if not 1 <= recorder.jpeg_quality <= 100 or recorder.queue_size <= 0:
+        raise ValueError("recorder JPEG quality and queue size are invalid")
+    if recorder.reserve_free_bytes < 0 or recorder.episode_clear_sec < 0:
+        raise ValueError("recorder retention and episode settings cannot be negative")
+    known_states = {"FATIGUE_WARNING", "DROWSY", "CRITICAL"}
+    known_violations = {"PHONE_USE", "SMOKING", "EATING", "SEATBELT_MISSING"}
+    if not set(recorder.trigger_states) <= known_states:
+        raise ValueError("recorder.trigger_states contains unsupported states")
+    if not set(recorder.trigger_violations) <= known_violations:
+        raise ValueError("recorder.trigger_violations contains unsupported violations")
+    if config.dashboard.port <= 0 or config.dashboard.status_hz <= 0:
+        raise ValueError("dashboard port and status_hz must be positive")
+    if min(config.dashboard.preview_fps, config.dashboard.safe_preview_fps, config.dashboard.max_clients) <= 0:
+        raise ValueError("dashboard preview settings must be positive")
+    if not 0 < config.power.exit_temperature_c < config.power.enter_temperature_c:
+        raise ValueError("power temperatures must satisfy 0 < exit < enter")
+    if min(config.power.sample_interval_sec, config.power.recovery_sec, config.power.safe_yolo_interval_sec) <= 0:
+        raise ValueError("power timing settings must be positive")
+    if not (
+        detector.inference_interval_sec
+        <= config.power.safe_yolo_interval_sec
+        <= detector.max_inference_interval_sec
+    ):
+        raise ValueError(
+            "power.safe_yolo_interval_sec must be within the behavior detector interval range"
+        )
     if not 0 <= config.fusion.perclos_min_coverage <= 1:
         raise ValueError("fusion.perclos_min_coverage must be between 0 and 1")
     if min(
