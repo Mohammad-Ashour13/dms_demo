@@ -7,9 +7,6 @@ from pathlib import Path
 import numpy as np
 
 from dms_final_system.runtime.capture.picamera2_camera import Picamera2Capture
-from dms_final_system.runtime.capture.picamera2_sensor_mode import (
-    select_full_fov_sensor_mode,
-)
 from dms_final_system.runtime.capture.picamera2_process import Picamera2ProcessCapture
 import dms_final_system.runtime.capture.picamera2_process as process_capture_module
 
@@ -31,21 +28,11 @@ class _Camera:
     def __init__(self, number):
         self.number = number
         self.controls = None
-        self.sensor = None
         self.closed = False
-        self.sensor_modes = [
-            {
-                "size": (64, 48),
-                "bit_depth": 10,
-                "fps": 30.0,
-                "crop_limits": (0, 0, 128, 96),
-            }
-        ]
         self.__class__.instances.append(self)
 
     def create_video_configuration(self, **kwargs):
         self.controls = kwargs["controls"]
-        self.sensor = kwargs["sensor"]
         return {"main": kwargs["main"]}
 
     def configure(self, configuration):
@@ -95,72 +82,13 @@ def test_picamera2_adapter_applies_fixed_headless_configuration(monkeypatch):
             "fps": 15.0,
             "frame_duration_limits_us": [66667, 66667],
             "actual_frame_duration_us": None,
-            "sensor_output_size": [64, 48],
-            "sensor_bit_depth": 10,
-            "sensor_crop_limits": [0, 0, 128, 96],
         }
         assert _Camera.instances[-1].controls == {
             "FrameDurationLimits": (66667, 66667)
         }
-        assert _Camera.instances[-1].sensor == {
-            "output_size": (64, 48),
-            "bit_depth": 10,
-        }
     finally:
         capture.close()
     assert _Camera.instances[-1].closed
-
-
-def test_full_fov_mode_prefers_widest_crop_then_smallest_sufficient_mode():
-    modes = [
-        {
-            "size": (1920, 1080),
-            "bit_depth": 10,
-            "fps": 60.0,
-            "crop_limits": (680, 692, 1920, 1080),
-        },
-        {
-            "size": (3280, 2464),
-            "bit_depth": 10,
-            "fps": 15.0,
-            "crop_limits": (0, 0, 3280, 2464),
-        },
-        {
-            "size": (1640, 1232),
-            "bit_depth": 10,
-            "fps": 40.0,
-            "crop_limits": (0, 0, 3280, 2464),
-        },
-    ]
-
-    selected = select_full_fov_sensor_mode(modes, (640, 480), 25.0)
-
-    assert selected["size"] == (1640, 1232)
-
-
-def test_full_fov_mode_rejects_unsupported_frame_rate():
-    modes = [
-        {
-            "size": (1920, 1080),
-            "bit_depth": 10,
-            "fps": 60.0,
-            "crop_limits": (680, 692, 1920, 1080),
-        },
-        {
-            "size": (3280, 2464),
-            "bit_depth": 10,
-            "fps": 15.0,
-            "crop_limits": (0, 0, 3280, 2464),
-        }
-    ]
-
-    try:
-        select_full_fov_sensor_mode(modes, (640, 480), 25.0)
-    except RuntimeError as exc:
-        assert "25 FPS" in str(exc)
-        assert "maximum 15 FPS" in str(exc)
-    else:
-        raise AssertionError("Expected unsupported frame rate to be rejected")
 
 
 def test_system_python_picamera2_process_uses_bounded_binary_frames(
