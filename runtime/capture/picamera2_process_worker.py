@@ -18,6 +18,11 @@ import time
 import numpy as np
 from picamera2 import Picamera2
 
+if __package__:
+    from .picamera2_sensor_mode import select_full_fov_sensor_mode
+else:  # Direct execution under Raspberry Pi OS system Python.
+    from picamera2_sensor_mode import select_full_fov_sensor_mode
+
 
 READY_MAGIC = b"DMS1"
 READY_HEADER = struct.Struct("<4sIId")
@@ -43,8 +48,17 @@ def _stream(args: argparse.Namespace) -> int:
     camera = Picamera2(args.camera_num)
     request = None
     try:
+        sensor_mode = select_full_fov_sensor_mode(
+            camera.sensor_modes,
+            (args.width, args.height),
+            args.fps,
+        )
         configuration = camera.create_video_configuration(
             main={"size": (args.width, args.height), "format": args.pixel_format},
+            sensor={
+                "output_size": tuple(sensor_mode["size"]),
+                "bit_depth": int(sensor_mode["bit_depth"]),
+            },
             controls={"FrameDurationLimits": (frame_duration_us, frame_duration_us)},
             buffer_count=4,
         )

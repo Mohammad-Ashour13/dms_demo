@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 
 from dms_final_system.shared.contracts import FramePacket
+from .picamera2_sensor_mode import select_full_fov_sensor_mode
 
 
 class Picamera2Capture:
@@ -47,10 +48,19 @@ class Picamera2Capture:
             ) from exc
         frame_duration_us = max(1, int(round(1_000_000.0 / max(self.fps, 1.0))))
         self.camera = Picamera2(self.camera_num)
+        sensor_mode = select_full_fov_sensor_mode(
+            self.camera.sensor_modes,
+            (self.width, self.height),
+            self.fps,
+        )
         configuration = self.camera.create_video_configuration(
             main={
                 "size": (self.width, self.height),
                 "format": self.pixel_format,
+            },
+            sensor={
+                "output_size": tuple(sensor_mode["size"]),
+                "bit_depth": int(sensor_mode["bit_depth"]),
             },
             controls={"FrameDurationLimits": (frame_duration_us, frame_duration_us)},
             buffer_count=4,
@@ -70,6 +80,12 @@ class Picamera2Capture:
             "fps": self.fps,
             "frame_duration_limits_us": [frame_duration_us, frame_duration_us],
             "actual_frame_duration_us": None,
+            "sensor_output_size": [
+                int(sensor_mode["size"][0]),
+                int(sensor_mode["size"][1]),
+            ],
+            "sensor_bit_depth": int(sensor_mode["bit_depth"]),
+            "sensor_crop_limits": [int(value) for value in sensor_mode["crop_limits"]],
         }
         with self.configuration_lock:
             self._actual_configuration = actual_configuration
